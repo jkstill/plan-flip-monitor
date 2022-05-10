@@ -10,6 +10,8 @@ These results are desired for testing execution plan flips that lead to poor per
 
 In all cases, `no_invalidate => false` is used when collecting or setting database object statistics, as we want the new plans created and used.
 
+Before doing that however, use the following script to generate statistics, and then back them up for later use.
+
 ## Collect Correct Statistics
 
 Use the `gather-stats-normal.sql` script to gather statistics.
@@ -52,12 +54,12 @@ The statistics table can be created with the `bin/create_stat_table.sh` script.
 For example:
 
 ```text
-$  bin/create_stat_table.sh -o c12 -d ora192rac02/swingbench.jks.com -u jkstill -p grok -n soe -t soe_stats
+$  bin/create_stat_table.sh -o c12 -d rac-scan/swingbench.jks.com -u jkstill -p XXXX -n soe -t soe_stats
 ORACLE_BASE environment variable is not being set since this
 information is not available for the current user ID jkstill.
 You can set ORACLE_BASE manually if it is required.
 Creating STATS_TABLE: soe_stats_export
-  Database: ora192rac02/swingbench.jks.com
+  Database: rac-scan/swingbench.jks.com
   Schema: jkstill
   Tablespace: NULL
 
@@ -119,15 +121,15 @@ SQL# desc soe.soe_stats
 The `export_statistics.sh` script is used to save current statistics:
 
 ```text
-$  bin/export_stats.sh -o c12 -d ora192rac02/swingbench.jks.com -u jkstill -p grok -n soe -t soe_stats -s soe -T SCHEMA
+$  bin/export_stats.sh -o c12 -d rac-scan/swingbench.jks.com -u jkstill -p XXXX -n soe -t soe_stats -s soe -T SCHEMA
 NO MATCH
-arglist: :JKSTILL:ORA192RAC02/SWINGBENCH.JKS.COM:SOE:SOE_STATS:SOE:SCHEMA:C12:
+arglist: :JKSTILL:rac-scan/SWINGBENCH.JKS.COM:SOE:SOE_STATS:SOE:SCHEMA:C12:
   REGEX: :[[:alnum:]]{3,}:[[:punct:][:alnum:]]{3,}:[[:alnum:]_$]+:[[:alnum:]_#$]+:(DICTIONARY_STATS|SYSTEM_STATS|FIXED_OBJECTS_STATS):[[:punct:][:alnum:]]{3,}:
 ORACLE_BASE environment variable is not being set since this
 information is not available for the current user ID jkstill.
 You can set ORACLE_BASE manually if it is required.
 Exporting Schema Stats for: soe
-  Database: ora192rac02/swingbench.jks.com
+  Database: rac-scan/swingbench.jks.com
   Table: soe_stats
 
 EXP: bin/../sql/export_schema_stats.sql soe soe soe_stats
@@ -167,10 +169,11 @@ a table created via DBMS_STATS.CREATE_STAT_TABLE
 -n owner        - owner of statistics table
 -t table_name   - statistics table to list from
                   as created by dbms_stats.create_stat_table
+-e              - detailed report - currently tables/indexes only
 -r dryrun       - show VALID_ARGS and exit without running the job
 
 -i              - statid of statistics set - defaults to %
-s schema       - schema name for which to list statistics - defaults to %
+-s schema       - schema name for which to list statistics - defaults to %
 
 -b              - object name to search for - table or index name - defaults to %
                   SQL wild cards allowed
@@ -189,16 +192,16 @@ s schema       - schema name for which to list statistics - defaults to %
 Here is a list of the sets available.  
 
 ```text
-$   bin/list_stats.sh -o c12 -d ora192rac02/swingbench.jks.com -u jkstill -p grok -n soe -t soe_stats -l 1
+$   bin/list_stats.sh -o c12 -d rac-scan/swingbench.jks.com -u jkstill -p XXXX -n soe -t soe_stats -l 1
 NO MATCH
-arglist: :JKSTILL:ORA192RAC02/SWINGBENCH.JKS.COM:SOE:SOE_STATS:1:%:%:C12:
+arglist: :JKSTILL:rac-scan/SWINGBENCH.JKS.COM:SOE:SOE_STATS:1:%:%:C12:
   REGEX: :[[:alnum:]_$]+:[[:punct:][:alnum:]]{3,}:[[:alnum:]_$]+:[[:alnum:]_#$]+:[2-5]{1}:*:*:[[:punct:][:alnum:]]{3,}:
 MATCHED
 ORACLE_BASE environment variable is not being set since this
 information is not available for the current user ID jkstill.
 You can set ORACLE_BASE manually if it is required.
 Exporting Schema Stats for: %
-  Database: ora192rac02/swingbench.jks.com
+  Database: rac-scan/swingbench.jks.com
   Table: soe_stats
 
 LIST: bin/../sql/list_stats.sql soe soe_stats 1 %
@@ -236,13 +239,13 @@ There are two date stamped sets of statistics.
 Now get some detail with level 3
 
 ```text
-$   bin/list_stats.sh -o c12 -d ora192rac02/swingbench.jks.com -u jkstill -p grok -n soe -t soe_stats -l 3 -i SOE_CDB_2205091508
+$   bin/list_stats.sh -o c12 -d rac-scan/swingbench.jks.com -u jkstill -p XXXX -n soe -t soe_stats -l 3 -i SOE_CDB_2205091508
 MATCHED
 ORACLE_BASE environment variable is not being set since this
 information is not available for the current user ID jkstill.
 You can set ORACLE_BASE manually if it is required.
 Exporting Schema Stats for: %
-  Database: ora192rac02/swingbench.jks.com
+  Database: rac-scan/swingbench.jks.com
   Table: soe_stats
 
 LIST: bin/../sql/list_stats.sql soe soe_stats 3 % SOE_CDB_2205091508
@@ -317,24 +320,89 @@ SOE_CDB_2205091508             SOE                            T   WAREHOUSES
 SQL> Disconnected from Oracle Database 19c Enterprise Edition Release 19.0.0.0.0 - Production
 ```
 
+#### List Statistics Details
+
+```text
+$  bin/list_stats.sh -o c12 -d rac-scan/swingbench.jks.com -u jkstill -p XXXX -t soe_stats -n soe -s soe -e -b ORDERS
+MATCHED
+ORACLE_BASE environment variable is not being set since this
+information is not available for the current user ID jkstill.
+You can set ORACLE_BASE manually if it is required.
+Listing Schema Stats for: soe
+  Database: rac-scan/swingbench.jks.com
+  Table: soe_stats
+
+DETAILS LIST: soe soe_stats 2 ORDERS %
+
+SQL*Plus: Release 12.1.0.2.0 Production on Mon May 9 17:26:18 2022
+
+Copyright (c) 1982, 2014, Oracle.  All rights reserved.
+
+SQL> Connected.
+SQL> Stats Table Owner:
+Stats Table Name:
+Schema Name (wildcards OK) ?
+Object Name (wildcards OK) ?
+Statid?
+
+PL/SQL procedure successfully completed.
+
+
+                                                                                                                                                                       In Memory
+                                                                                                                                                                     Compression In Memory
+STATID                         OWNER.TABLE.[partition].[subpart]                                                  NUM ROWS       BLOCKS  AVG ROW LEN     SAMPLE SIZE       Units    Blocks
+------------------------------ --------------------------------------------------------------------------- --------------- ------------ ------------ --------------- ----------- ---------
+SOE_CDB_2205051533             SOE.ORDERS                                                                       36,872,929      519,599           89      36,872,929
+SOE_CDB_2205091508             SOE.ORDERS                                                                       36,872,929      519,599           89      36,872,929
+
+2 rows selected.
+
+SQL> Stats Table Owner:
+Stats Table Name:
+Schema Name (wildcards OK) ?
+Object Name (wildcards OK) ?
+Statid?
+
+PL/SQL procedure successfully completed.
+
+
+                                                                                                                                            DISTINCT     LEAF BLOCKS    DATA BLOCKS      CLUSTERING
+STATID                         OWNER.TABLE.INDEX.[partition].[subpart]                                            NUM ROWS  LEAF_BLOCKS         KEYS         PER KEY        PER KEY          FACTOR BLEVEL  SAMPLE SIZE
+------------------------------ --------------------------------------------------------------------------- --------------- ------------ ------------ --------------- -------------- --------------- ------ ------------
+SOE_CDB_2205051533             SOE.ORDERS.ORDER_PK                                                              36,916,428       98,857   36,916,428               1              1   36,916,426.00      2   36,916,428
+SOE_CDB_2205051533             SOE.ORDERS.ORD_CUSTOMER_IX                                                       36,915,779      108,018    1,996,800               1             18   36,915,087.00      2   36,915,779
+SOE_CDB_2205051533             SOE.ORDERS.ORD_ORDER_DATE_IX                                                     36,916,062      155,494   34,033,664               1              1   36,911,579.00      2   36,916,062
+SOE_CDB_2205051533             SOE.ORDERS.ORD_SALES_REP_IX                                                       2,859,580        5,837          906               6          2,893    2,621,885.00      2    2,859,580
+SOE_CDB_2205051533             SOE.ORDERS.ORD_WAREHOUSE_IX                                                      36,916,282      156,274       10,270              15          3,566   36,632,041.00      2   36,916,282
+SOE_CDB_2205091508             SOE.ORDERS.ORDER_PK                                                              36,916,428       98,857   36,916,428               1              1   36,916,426.00      2   36,916,428
+SOE_CDB_2205091508             SOE.ORDERS.ORD_CUSTOMER_IX                                                       36,915,779      108,018    1,996,800               1             18   36,915,087.00      2   36,915,779
+SOE_CDB_2205091508             SOE.ORDERS.ORD_ORDER_DATE_IX                                                     36,916,062      155,494   34,033,664               1              1   36,911,579.00      2   36,916,062
+SOE_CDB_2205091508             SOE.ORDERS.ORD_SALES_REP_IX                                                       2,859,580        5,837          906               6          2,893    2,621,885.00      2    2,859,580
+SOE_CDB_2205091508             SOE.ORDERS.ORD_WAREHOUSE_IX                                                      36,916,282      156,274       10,270              15          3,566   36,632,041.00      2   36,916,282
+
+10 rows selected.
+
+SQL> Disconnected from Oracle Database 19c Enterprise Edition Release 19.0.0.0.0 - Production
+```
+
 ### Export Statistics to a DMP file
 
 Use the `bin/exp_stats.sh` script:
 
 ```text
 
-$   bin/exp_stats.sh -o c12 -d ora192rac02/swingbench.jks.com -u jkstill -p grok -n soe -t soe_stats  -i SOE_CDB_2205091508 -s soe
+$   bin/exp_stats.sh -o c12 -d rac-scan/swingbench.jks.com -u jkstill -p XXXX -n soe -t soe_stats  -i SOE_CDB_2205091508 -s soe
 MATCHED
-ALLARGS: :JKSTILL:ORA192RAC02/SWINGBENCH.JKS.COM:SOE:SOE_STATS:SOE_CDB_2205091508:SOE:C12:
+ALLARGS: :JKSTILL:rac-scan/SWINGBENCH.JKS.COM:SOE:SOE_STATS:SOE_CDB_2205091508:SOE:C12:
 ORACLE_BASE environment variable is not being set since this
 information is not available for the current user ID jkstill.
 You can set ORACLE_BASE manually if it is required.
 export STATS_TABLE: soe_stats
-  Database: ora192rac02/swingbench.jks.com
+  Database: rac-scan/swingbench.jks.com
   Schema: jkstill
 NLS_LANG: AMERICAN_AMERICA.AL32UTF8
-expLogFile: logs/soe_ora192rac02-swingbench.jks.com_stats_SOE_CDB_2205091508_SOE_exp.log
-expDmpFile: dmp/soe_ora192rac02-swingbench.jks.com_SOE_CDB_2205091508_SOE_stats.dmp
+expLogFile: logs/soe_rac-scan-swingbench.jks.com_stats_SOE_CDB_2205091508_SOE_exp.log
+expDmpFile: dmp/soe_rac-scan-swingbench.jks.com_SOE_CDB_2205091508_SOE_stats.dmp
 
 Export: Release 12.1.0.2.0 - Production on Mon May 9 15:46:29 2022
 
@@ -354,7 +422,7 @@ Export terminated successfully without warnings.
 
 
 $  ls -ladtr dmp/*
--rw-rw-r-- 1 jkstill dba 172032 May  9 15:46 dmp/soe_ora192rac02-swingbench.jks.com_SOE_CDB_2205091508_SOE_stats.dmp
+-rw-rw-r-- 1 jkstill dba 172032 May  9 15:46 dmp/soe_rac-scan-swingbench.jks.com_SOE_CDB_2205091508_SOE_stats.dmp
 
 ```
 
@@ -364,14 +432,14 @@ Use the `bin/imp_stats.sh` script:
 
 ```text
 
-$   bin/imp_stats.sh -o c12 -d ora192rac02/swingbench.jks.com -u jkstill -p grok -f dmp/soe_ora192rac02-swingbench.jks.com_SOE_CDB_2205091508_SOE_stats.dmp -F soe -T jkstill
+$   bin/imp_stats.sh -o c12 -d rac-scan/swingbench.jks.com -u jkstill -p XXXX -f dmp/soe_rac-scan-swingbench.jks.com_SOE_CDB_2205091508_SOE_stats.dmp -F soe -T jkstill
 MATCHED
-ARGS: :JKSTILL:ORA192RAC02/SWINGBENCH.JKS.COM:SOE:JKSTILL:DMP/SOE_ORA192RAC02-SWINGBENCH.JKS.COM_SOE_CDB_2205091508_SOE_STATS.DMP:C12:
+ARGS: :JKSTILL:rac-scan/SWINGBENCH.JKS.COM:SOE:JKSTILL:DMP/SOE_rac-scan-SWINGBENCH.JKS.COM_SOE_CDB_2205091508_SOE_STATS.DMP:C12:
 ORACLE_BASE environment variable is not being set since this
 information is not available for the current user ID jkstill.
 You can set ORACLE_BASE manually if it is required.
 export STATS_TABLE:
-  Database: ora192rac02/swingbench.jks.com
+  Database: rac-scan/swingbench.jks.com
   Schema: jkstill
 
 Import: Release 12.1.0.2.0 - Production on Mon May 9 15:49:10 2022
@@ -412,5 +480,43 @@ SQL# select count(*) from soe_stats;
 ### Import Statistics
 
 Now the default statistics will be imported to SOE.
+
+```text
+$  bin/import_stats.sh -o c12 -d rac-scan/swingbench.jks.com -u jkstill -p XXXX -t soe_stats -n soe -s soe -T schema -v NO -f YES -i SOE_CDB_2205091508
+NO MATCH
+arglist: :JKSTILL:rac-scan/SWINGBENCH.JKS.COM:SOE:SOE_STATS:SOE:SCHEMA:SOE_CDB_2205091508:NO:YES:C12:
+  REGEX: :[[:alnum:]_$]+:[[:punct:][:alnum:]]{3,}:[[:alnum:]_$]+:[[:alnum:]_#$]+::(DICTIONARY_STATS|SYSTEM_STATS|FIXED_OBJECTS_STATS):[[:alnum:][:punct:]]+:([YyNn]|YES|yes|NO|no):([YyNn]|YES|yes|NO|no):[[:punct:][:alnum:]]{3,}:
+MATCHED
+ORACLE_BASE environment variable is not being set since this
+information is not available for the current user ID jkstill.
+You can set ORACLE_BASE manually if it is required.
+Importing Schema Stats for: soe  statid:
+Importing Schema Stats for: SOE_CDB_2205091508  statid:
+  Database: rac-scan/swingbench.jks.com
+  Table: soe_stats
+
+IMP: bin/../sql/import_schema_stats.sql soe soe_stats SOE_CDB_2205091508
+
+SQL*Plus: Release 12.1.0.2.0 Production on Mon May 9 17:37:36 2022
+
+Copyright (c) 1982, 2014, Oracle.  All rights reserved.
+
+SQL> Connected.
+SQL> Import Stats Table Owner:
+Statistics Table Name:
+Import Stats for Schema:
+Import Stats for StatID:
+NOINVALIDATE? YES/NO:
+FORCE IMPORT? YES/NO:
+
+PL/SQL procedure successfully completed.
+
+SQL> Disconnected from Oracle Database 19c Enterprise Edition Release 19.0.0.0.0 - Production
+```
+
+## Generate Fake Statistics
+
+
+
 
 
