@@ -1,6 +1,8 @@
 
 -- plan flip monitor
 
+@@pfmon-config
+
 create user pfmon identified by pfmon;
 
 grant 
@@ -11,6 +13,12 @@ grant
 to pfmon;
 
 
-alter user pfmon default tablespace planflip quota unlimited on planflip;
+
+@@save-sqlplus-settings.sql
+
+set verify on
+alter user pfmon default tablespace &pfmon_tbs quota unlimited on &pfmon_tbs;
+
+@&sqltempfile
 
 

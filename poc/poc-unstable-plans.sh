@@ -2,6 +2,12 @@
 
 # driver for poc-unstable-plans.pl
 
+# cd to script location
+declare relPath=$(dirname $0)
+cd $relPath || { echo "could not cd to '$relPath'"; exit 1; }
+declare scriptPath=$(pwd)
+cd $scriptPath || { echo "could not cd to '$scriptPath'"; exit 2; }
+
 # set Y if running bequeath connection
 declare LOCAL_SYSDBA=N
 

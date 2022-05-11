@@ -14,7 +14,7 @@ col inst_id format 9999 head 'INST'
 col sid format 999999 head 'SID'
 col ID format 99999 
 col name format a35
-col sql_feature format a15
+col sql_feature format a35
 col isdefault format a4 head 'DEF|VAL?'
 col value format a40 
 col con_id format 9999 head 'CON|ID'
