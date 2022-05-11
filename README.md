@@ -93,6 +93,13 @@ It is even possible to generate statistics manually as part of a data load, then
 The purpose of this monitor is to detect when a plan change leads to degraded performance, and notify responsible parties about it.
 
 
+## Fake Database Statistics
+
+See `./swingbench-fake-stats/README.md` for instructions on setting fake statistics.
+
+Why fake statistics?  Lying to the optimizer can cause poor execution plans, which is desirable for testing.
+
+
 
 
 

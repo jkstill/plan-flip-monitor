@@ -32,7 +32,11 @@ The statistics can then be 'imported'.
 
 The statistics tables can also be exported and imported by the standard 'exp/imp' utilities as well.
 
-cd to the ~/oracle/dba/statops directory to run the following scripts.
+The scripts used for generating, exporting and importing Oracle Database statistics are publicly availalbe:
+
+   [statops](https://github.com/jkstill/statops)
+
+Once [statops](https://github.com/jkstill/statops) is installed, cd to the ~/oracle/dba/statops directory to run the following scripts.
 
 ### Create The Statistics Table
 
