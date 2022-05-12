@@ -43,6 +43,8 @@ my $snapStartTime='';
 my $snapEndTime='';
 my $csvOutput=0;
 my $csvDelimiter=',';
+my $timeScope='historic';
+my $realtime=0;
 
 my %optctl = ();
 
@@ -62,6 +64,7 @@ Getopt::Long::GetOptions(
 	"csv!" => \$csvOutput,
 	"csv-delimiter=s" => \$csvDelimiter,
 	"sysdba!",
+	"realtime!" => \$realtime,
 	"local-sysdba!",
 	"sysoper!",
 	"z|h|help" => \$help );
@@ -70,13 +73,18 @@ $localSysdba=$optctl{'local-sysdba'};
 
 if ( $help ){ usage(0); }
 
-if ( ! isDateValid($snapStartTime)) {
-	warn "invalid date: $snapStartTime\n";
-	usage(1);
-}
-if ( ! isDateValid($snapEndTime)) {
-	warn "invalid date: $snapEndTime\n";
-	usage(1);
+# if realtime we do not care about start and stop times
+if ( $realtime ) {
+	$timeScope='realtime';
+} else {
+	if ( ! isDateValid($snapStartTime)) {
+		warn "invalid date: $snapStartTime\n";
+		usage(1);
+	}
+	if ( ! isDateValid($snapEndTime)) {
+		warn "invalid date: $snapEndTime\n";
+		usage(1);
+	}
 }
 
 if (! $localSysdba) {
@@ -150,23 +158,42 @@ if ( ! $csvOutput ) {
 }
 my $dbVersion="${majorOraVersion}.${minorOraVersion}" * 1; # convert to number
 
-my $sql = SQL::getSql('unstable-plans-baseline-' . $dbType);
+my $sql='';
+my $sqlName="unstable-plans-baseline-${timeScope}-${dbType}";
+
+eval {
+	$sql = SQL::getSql($sqlName);
+	die unless $sql;
+};
+
+if ($@) {
+	$dbh->disconnect;
+	die "failed to get SQL '$sqlName'\n";
+}
 
 #print qq(testsql: $sql\n);
 my $sth=$dbh->prepare($sql);
 
 if ( ! $csvOutput ) {
+
 	print qq{
 
- running query for unstable-plans-baseline-$dbType
+ running query for $sqlName
+};
+	if ( ! $realtime ) {
+		print qq{
+  format: $timestampFormat
    start: $snapStartTime
      end: $snapEndTime
-  format: $timestampFormat
-
+};
 };
 }
 
-$sth->execute($snapStartTime, $snapEndTime, $timestampFormat);
+if ($realtime) {
+	$sth->execute;
+} else {
+	$sth->execute($snapStartTime, $snapEndTime, $timestampFormat);
+}
 
 my $decimalPlaces=6;
 my $decimalFactor=10**$decimalPlaces;
@@ -188,9 +215,10 @@ while ( $ary = $sth->fetchrow_arrayref ) {
 		foreach my $el ( 0 .. $#data ) {
 			# is it a number?
 			my $value = $data[$el];
-			if ( $value =~ /^[[:digit:]\.]+$/ ) {
+			if ( $value =~ /^[[:digit:]\.]+$/ ) { # numeric - assuming at most 1 decimal point
 				$value = int($value * $decimalFactor) / $decimalFactor;
-				$data[$el] = $value	;
+				my $tmpVal = sprintf("%9.${decimalPlaces}f", $value); $tmpVal =~ s/\s+//g;
+				$data[$el] = $tmpVal;
 			}
 		}
 
@@ -229,19 +257,29 @@ sub usage {
 
 usage: $basename
 
-  -database      target instance
-  -username      target instance account name
-  -password      target instance account password
-  -sysdba        logon as sysdba
-  -csv           switch to CSV output
-  -begin-time    earliest time to check AWR, in 'YYYY-MM-DD HH24:MI:SS' format
-  -end-time      latest time to check AWR, in 'YYYY-MM-DD HH24:MI:SS' format
-  -sysoper       logon as sysoper
-  -local-sysdba  logon to local instance as sysdba. ORACLE_SID must be set
-                 the following options will be ignored:
-                   -database
-                   -username
-                   -password
+Detect USER SQL where executions are outside the stddev of execution times
+Currently the values to detect these are hardcoded to a low value.
+
+By default DBA_HIST views are used to look at historical data. 
+'Historical' can be as recent as the most recent snapshot-1, snapshot.
+
+The -realtime option will instead look at realtime data in gv\$sqlstats
+
+  --database      target instance
+  --username      target instance account name
+  --password      target instance account password
+  --sysdba        logon as sysdba
+  --csv           switch to CSV output
+  --begin-time    earliest time to check AWR, in 'YYYY-MM-DD HH24:MI:SS' format
+  --end-time      latest time to check AWR, in 'YYYY-MM-DD HH24:MI:SS' format
+  --realtime      look at realtime data in gv\$sqlstats.
+                 the --begin-time and --end-time arguments are ignored
+  --sysoper       logon as sysoper
+  --local-sysdba  logon to local instance as sysdba. ORACLE_SID must be set
+                  the following options will be ignored:
+                   --database
+                   --username
+                   --password
 
   examples:
 

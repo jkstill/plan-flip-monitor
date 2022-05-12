@@ -74,7 +74,12 @@ begin
 	t_tab_numblks('PRODUCT_DESCRIPTIONS')	:= 5;
 	t_tab_numblks('ORDERENTRY_METADATA')	:= 5;
 
-	for indrec in (select table_name, index_name from user_indexes order by table_name, index_name)
+	for indrec in (
+		select table_name, index_name
+		from user_indexes
+		where table_name not in ('SOE_STATS')
+		order by table_name, index_name
+	)
 	loop
 		dbms_output.put_line('Table: ' || indrec.table_name );
 		dbms_output.put_line('	Index: ' || indrec.index_name );

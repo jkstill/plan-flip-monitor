@@ -87,7 +87,11 @@ begin
 	t_tab_avgrlen('ORDERENTRY_METADATA')	:= 32;
 
 
-	for tabrec in (select table_name from user_tables)
+	for tabrec in (
+		select table_name
+		from user_tables
+		where table_name not in ('SOE_STATS')
+	)
 	loop
 		dbms_output.put_line('Table: ' || tabrec.table_name);
 
