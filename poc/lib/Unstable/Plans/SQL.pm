@@ -17,6 +17,22 @@ sub getSql{
 
 our %sql = ();
 
+=head1 bind variables
+
+ unstable-plans-baseline-[historic|realtime]-[CONTAINER|LEGACY]
+
+   :1 low value for norm_stddev
+	:2 low value for max_etime
+
+ unstable-plans-baseline-historicrealtime-[CONTAINER|LEGACY]
+  
+	:3 begin_time
+	:4 end_time
+	:5 date_format
+
+=cut
+
+
 %sql = (
 	'unstable-plans-baseline-historic-CONTAINER' => q{with
 min_snap_id as
@@ -24,7 +40,7 @@ min_snap_id as
 	select
 		min(snap_id) snap_id
 	from dba_hist_snapshot
-	where begin_interval_time >=  to_timestamp(:1,:3)
+	where begin_interval_time >=  to_timestamp(:3,:5)
 		and con_id = sys_context('userenv','con_id')
 ),
 max_snap_id as
@@ -32,7 +48,7 @@ max_snap_id as
 	select
 		max(snap_id) snap_id
 	from dba_hist_snapshot
-	where end_interval_time <= to_timestamp(:2,:3)
+	where end_interval_time <= to_timestamp(:4,:5)
 		and con_id = sys_context('userenv','con_id')
 ),
 rawdata as
@@ -119,8 +135,8 @@ getuser as (
 		, r.norm_stddev
 	from report_data r
 	where
-   	r.norm_stddev   > .001
-   	and r.max_etime > .001
+   	r.norm_stddev > :1
+   	and r.max_etime > :2
 	ORDER BY
    	norm_stddev
 )
@@ -141,14 +157,14 @@ min_snap_id as
 	select
 		min(snap_id) snap_id
 	from dba_hist_snapshot
-	where begin_interval_time >=  to_timestamp(:1,:3)
+	where begin_interval_time >=  to_timestamp(:3,:5)
 ),
 max_snap_id as
 (
 	select
 		max(snap_id) snap_id
 	from dba_hist_snapshot
-	where end_interval_time <= to_timestamp(:2,:3)
+	where end_interval_time <= to_timestamp(:4,:5)
 ),
 rawdata as
 (
@@ -234,8 +250,8 @@ getuser as (
 		, r.norm_stddev
 	from report_data r
 	where
-   	r.norm_stddev   > .001
-   	and r.max_etime > .001
+   	r.norm_stddev > :1
+   	and r.max_etime > :2
 	ORDER BY
    	norm_stddev
 )
@@ -331,8 +347,8 @@ getuser as (
 		, r.norm_stddev
 	from report_data r
 	where
-   	r.norm_stddev   > .001
-   	and r.max_etime > .001
+   	r.norm_stddev > :1
+   	and r.max_etime > :2
 	ORDER BY
    	norm_stddev
 )
@@ -428,8 +444,8 @@ getuser as (
 		, r.norm_stddev
 	from report_data r
 	where
-   	r.norm_stddev   > .001
-   	and r.max_etime > .001
+   	r.norm_stddev  > :1
+   	and r.max_etime > :2
 	ORDER BY
    	norm_stddev
 )

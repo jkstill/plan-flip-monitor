@@ -45,6 +45,8 @@ my $csvOutput=0;
 my $csvDelimiter=',';
 my $timeScope='historic';
 my $realtime=0;
+my $defMinNormStddev=0.001;
+my $defMinimumMaxEtime=0.001;
 
 my %optctl = ();
 
@@ -60,6 +62,8 @@ Getopt::Long::GetOptions(
 	"username=s" => \$username,
 	"password=s" => \$password,
 	"begin-time=s" => \$snapStartTime,
+  	"min-stddev=n" => \$defMinNormStddev,
+  	"max-exe-time=n" => \$defMinimumMaxEtime,
 	"end-time=s" => \$snapEndTime,
 	"csv!" => \$csvOutput,
 	"csv-delimiter=s" => \$csvDelimiter,
@@ -190,9 +194,9 @@ if ( ! $csvOutput ) {
 }
 
 if ($realtime) {
-	$sth->execute;
+	$sth->execute($defMinNormStddev,$defMinimumMaxEtime);
 } else {
-	$sth->execute($snapStartTime, $snapEndTime, $timestampFormat);
+	$sth->execute($defMinNormStddev,$defMinimumMaxEtime,$snapStartTime, $snapEndTime, $timestampFormat);
 }
 
 my $decimalPlaces=6;
@@ -263,7 +267,17 @@ Currently the values to detect these are hardcoded to a low value.
 By default DBA_HIST views are used to look at historical data. 
 'Historical' can be as recent as the most recent snapshot-1, snapshot.
 
-The -realtime option will instead look at realtime data in gv\$sqlstats
+The --realtime option will instead look at realtime data in gv\$sqlstats
+
+The script will report on SQL statements where these criteria are met:
+
+ normalized stddev of execution time is N.N of stddev - default is 0.001
+ the maximum execution time is N.N seconds or more - default is 0.001
+
+The defaults will likely catch a few SQL statements.  
+
+Using the defaults gets a report that may be used to tune the values for --min-stddev and --min-exe-time
+
 
   --database      target instance
   --username      target instance account name
@@ -273,7 +287,9 @@ The -realtime option will instead look at realtime data in gv\$sqlstats
   --begin-time    earliest time to check AWR, in 'YYYY-MM-DD HH24:MI:SS' format
   --end-time      latest time to check AWR, in 'YYYY-MM-DD HH24:MI:SS' format
   --realtime      look at realtime data in gv\$sqlstats.
-                 the --begin-time and --end-time arguments are ignored
+                  the --begin-time and --end-time arguments are ignored
+  --min-stddev    minimum value of normalized stddev exe times to look for - defaults to 0.001
+  --max-exe-time  minimum value of max execution time to look for  - defaults to 0.001
   --sysoper       logon as sysoper
   --local-sysdba  logon to local instance as sysdba. ORACLE_SID must be set
                   the following options will be ignored:
