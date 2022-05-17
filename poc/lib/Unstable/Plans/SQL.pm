@@ -99,7 +99,7 @@ rawdata as
 	rawdata
 )
 , lios as (
-   select distinct sql_id, avg_lio
+   select distinct sql_id, plan_hash_value, avg_lio
    from data
 )
 , plan_counts as (
@@ -111,7 +111,7 @@ rawdata as
 , report_data AS
 (
 	select
-	sql_id
+	sql_id, plan_hash_value
 		, sum( execs ) execs
 		, min( avg_etime )              min_etime
 		, max( avg_etime )              max_etime
@@ -121,13 +121,15 @@ rawdata as
 	group by
 		sql_id
 		, stddev_etime
+		, plan_hash_value
 ),
 getuser as (
 	select
 		r.sql_id
+		, r.plan_hash_value
 		, r.execs
 		, (select max(parsing_schema_name) from gv$sqlarea where sql_id = r.sql_id) username
-		, ( select sum(avg_lio) from lios where sql_id = r.sql_id)/ r.execs avg_lio
+		, ( select sum(avg_lio) from lios where sql_id = r.sql_id and plan_hash_value = r.plan_hash_value)/ r.execs avg_lio
 		, ( select plan_count from plan_counts where sql_id = r.sql_id) plan_count
 		, r.min_etime
 		, r.max_etime
@@ -214,7 +216,7 @@ rawdata as
 	rawdata
 )
 , lios as (
-   select distinct sql_id, avg_lio
+   select distinct sql_id, plan_hash_value, avg_lio
    from data
 )
 , plan_counts as (
@@ -226,7 +228,7 @@ rawdata as
 , report_data AS
 (
 	select
-	sql_id
+	sql_id, plan_hash_value
 		, sum( execs ) execs
 		, min( avg_etime )              min_etime
 		, max( avg_etime )              max_etime
@@ -236,13 +238,15 @@ rawdata as
 	group by
 		sql_id
 		, stddev_etime
+		, plan_hash_value
 ),
 getuser as (
 	select
 		r.sql_id
+		, r.plan_hash_value
 		, r.execs
 		, (select max(parsing_schema_name) from gv$sqlarea where sql_id = r.sql_id) username
-		, ( select sum(avg_lio) from lios where sql_id = r.sql_id)/ r.execs avg_lio
+		, ( select sum(avg_lio) from lios where sql_id = r.sql_id and plan_hash_value = r.plan_hash_value)/ r.execs avg_lio
 		, ( select plan_count from plan_counts where sql_id = r.sql_id) plan_count
 		, r.min_etime
 		, r.max_etime
@@ -311,7 +315,7 @@ rawdata as
 	rawdata
 )
 , lios as (
-   select distinct sql_id, avg_lio
+   select distinct sql_id, plan_hash_value, avg_lio
    from data
 )
 , plan_counts as (
@@ -323,7 +327,7 @@ rawdata as
 , report_data AS
 (
 	select
-	sql_id
+	sql_id, plan_hash_value
 		, sum( execs ) execs
 		, min( avg_etime )              min_etime
 		, max( avg_etime )              max_etime
@@ -333,13 +337,15 @@ rawdata as
 	group by
 		sql_id
 		, stddev_etime
+		, plan_hash_value
 ),
 getuser as (
 	select
 		r.sql_id
+		, r.plan_hash_value
 		, r.execs
 		, (select max(parsing_schema_name) from gv$sqlarea where sql_id = r.sql_id) username
-		, ( select sum(avg_lio) from lios where sql_id = r.sql_id)/ r.execs avg_lio
+		, ( select sum(avg_lio) from lios where sql_id = r.sql_id and plan_hash_value = r.plan_hash_value)/ r.execs avg_lio
 		, ( select plan_count from plan_counts where sql_id = r.sql_id) plan_count
 		, r.min_etime
 		, r.max_etime
@@ -408,7 +414,7 @@ rawdata as
 	rawdata
 )
 , lios as (
-   select distinct sql_id, avg_lio
+   select distinct sql_id, plan_hash_value, avg_lio
    from data
 )
 , plan_counts as (
@@ -420,7 +426,7 @@ rawdata as
 , report_data AS
 (
 	select
-	sql_id
+	sql_id, plan_hash_value
 		, sum( execs ) execs
 		, min( avg_etime )              min_etime
 		, max( avg_etime )              max_etime
@@ -430,13 +436,15 @@ rawdata as
 	group by
 		sql_id
 		, stddev_etime
+		, plan_hash_value
 ),
 getuser as (
 	select
 		r.sql_id
+		, r.plan_hash_value
 		, r.execs
 		, (select max(parsing_schema_name) from gv$sqlarea where sql_id = r.sql_id) username
-		, ( select sum(avg_lio) from lios where sql_id = r.sql_id)/ r.execs avg_lio
+		, ( select sum(avg_lio) from lios where sql_id = r.sql_id and plan_hash_value = r.plan_hash_value)/ r.execs avg_lio
 		, ( select plan_count from plan_counts where sql_id = r.sql_id) plan_count
 		, r.min_etime
 		, r.max_etime

@@ -35,6 +35,7 @@ BEGIN {
 use lib "$scriptPath/lib";
 use Unstable::Plans::SQL;
 use Mail::Simple;
+use Capture::Tiny ':all';
 
 #exit;
 
@@ -51,9 +52,11 @@ my $realtime=0;
 my $defMinNormStddev=0.001;
 my $defMinimumMaxEtime=0.001;
 my $sendAlerts=0;
+my $saveAlerts=0;
+my $DEBUG=0;
 
 # saves sql_id and time alerted
-my $alertLogCSV='./poc-plan-flip.csv';
+my $alertLogCSV="$scriptPath/poc-plan-flip.csv";
 
 # if alerted for a SQL_ID, do not alert again for this many seconds
 my $alertFrequency=86400;
@@ -65,32 +68,12 @@ my %emailConfig;
 
 my $configFile="$scriptPath/planflip.conf";
 
-if ( -r $configFile ) {
-	my $fh = IO::File->new($configFile,'r') or die "could not open $configFile = $!";
-	my @config=<$fh>;
-	my $cmd=join('',@config);
-	#print "cmd: $cmd\n";
-	eval $cmd;
+getConfigs($configFile);
 
-	if ($@) {
-		warn "Error!\n";
-		die "error processing configfile: $configFile - $!\n";
-	}
-	$fh->close;
-
-}
 
 my %alerts=();
 
-if ( -r $alertLogCSV ) {
-	my $fh = IO::File->new($alertLogCSV,'r') or die "could not open $alertLogCSV = $!";
-	while (<$fh>) {
-		chomp;
-		my ($sqlid,$alertTime)=split(',');
-		$alerts{$sqlid} = $alertTime;
-	}
-	$fh->close;
-}
+getAlertTimes($alertLogCSV,\%alerts);
 
 #print Dumper(\%emailConfig);
 # test the alert
@@ -98,6 +81,7 @@ if ( -r $alertLogCSV ) {
 #$emailConfig{mailmsg} = "sql_id: asdfas234234s found to be unstable";
 #sendAlert(\%emailConfig);
 
+#print Dumper(\%alerts);
 #exit;
 
 my %optctl = ();
@@ -120,11 +104,13 @@ Getopt::Long::GetOptions(
 	"csv!" => \$csvOutput,
 	"csv-delimiter=s" => \$csvDelimiter,
 	"send-alerts!" => \$sendAlerts,
+	"save-alerts!" => \$saveAlerts,
 	"alert-freq=n" => \$alertFrequency,
 	"sysdba!",
 	"realtime!" => \$realtime,
 	"local-sysdba!",
 	"sysoper!",
+	"debug!" => \$DEBUG,
 	"z|h|help" => \$help );
 
 $localSysdba=$optctl{'local-sysdba'};
@@ -260,59 +246,74 @@ my $ary;
 my $csvHdrPrinted=0;
 my %sqlidsToReport=();
 my $currentTime=getEpoch();
-print "Epoch: $currentTime\n";
+my $resultsReport='';  # if sending alerts, capture the report from write to STDOUT[_TOP|
+print "Epoch: $currentTime\n" unless $csvOutput;
 
-while ( $ary = $sth->fetchrow_arrayref ) {
-	#print join(' - ',@{$ary}) . "\n";
-	my $sqlid = $ary->[0];
+# capture the output from write
 
-	if ($csvOutput) {
-		# should not be any undef or null values in this array
-		if ( ! $csvHdrPrinted ) {
-			$csvHdrPrinted=1;
-			print join(qq/$csvDelimiter/, @{ $sth->{NAME_lc} }) . "\n";
-		}
-		# it would be nice if there were some global setting to limit decimal places in perl.
-		# then just print the array
-		# limit to 6 decimal places
-		my @data=@{$ary};
-		foreach my $el ( 0 .. $#data ) {
-			# is it a number?
-			my $value = $data[$el];
-			if ( $value =~ /^[[:digit:]\.]+$/ ) { # numeric - assuming at most 1 decimal point
-				$value = int($value * $decimalFactor) / $decimalFactor;
-				my $tmpVal = sprintf("%9.${decimalPlaces}f", $value); $tmpVal =~ s/\s+//g;
-				$data[$el] = $tmpVal;
+my ($stdoutDATA, $stderrDATA, @result) = capture {
+
+	while ( $ary = $sth->fetchrow_arrayref ) {
+		#print join(' - ',@{$ary}) . "\n";
+		my $sqlid = $ary->[0];
+		my $planHashValue = $ary->[1];
+
+		if ($csvOutput) {
+			# should not be any undef or null values in this array
+			if ( ! $csvHdrPrinted ) {
+				$csvHdrPrinted=1;
+				print join(qq/$csvDelimiter/, @{ $sth->{NAME_lc} }) . "\n";
 			}
+			# it would be nice if there were some global setting to limit decimal places in perl.
+			# then just print the array
+			# limit to 6 decimal places
+			my @data=@{$ary};
+			foreach my $el ( 0 .. $#data ) {
+				# is it a number?
+				my $value = $data[$el];
+				if ( $value =~ /^[[:digit:]\.]+$/ ) { # numeric - assuming at most 1 decimal point
+					$value = int($value * $decimalFactor) / $decimalFactor;
+					my $tmpVal = sprintf("%9.${decimalPlaces}f", $value); $tmpVal =~ s/\s+//g;
+					$data[$el] = $tmpVal;
+				}
+			}
+
+			print join(qq/$csvDelimiter/,@data) . "\n";
+		} else {
+			write;
 		}
 
-		print join(qq/$csvDelimiter/,@data) . "\n";
-	} else {
-		write;
-	}
+		#warn "SQLID: $sqlid\n";
+		if ( exists $alerts{$sqlid}->{$planHashValue} ) {
+			# determine if the last time reported should be updated
 
-	#warn "SQLID: $sqlid\n";
-	if ( exists $alerts{$sqlid} ) {
-		# determine if the last time reported should be updated
-		if ( $alerts{$sqlid} - $currentTime > $alertFrequency ) {
-			$alerts{$sqlid} = $currentTime;
-			$sqlidsToReport{$sqlid} = $currentTime;
+			my $deltaTime = ( $currentTime + 0 ) - ( $alerts{$sqlid}->{$planHashValue} + 0);
+			debugWarn( "   current time: " . $currentTime . "\n");
+			debugWarn( "  previous time: " . $alerts{$sqlid}->{$planHashValue} . "\n");
+			debugWarn( "     delta time: " . $deltaTime . "\n");
+			debugWarn( "     alert freq: " . $alertFrequency  . "\n");
+			debugWarn( "==============================\n");
+
+			if ( $currentTime - $alerts{$sqlid}->{$planHashValue} > $alertFrequency ) {
+				$alerts{$sqlid}->{$planHashValue} = $currentTime;
+				$sqlidsToReport{$sqlid}->{$planHashValue} = $currentTime;
+			}
+		} else {
+			$alerts{$sqlid}->{$planHashValue} = $currentTime;
+			$sqlidsToReport{$sqlid}->{$planHashValue} = $currentTime;
 		}
-	} else {
-		$alerts{$sqlid} = $currentTime;
-		$sqlidsToReport{$sqlid} = $currentTime;
 	}
+};
 
-}
-
+print '@result: ' . Dumper(\@result) . "\n" if defined($result[0]);;
 #print '%sqlidsToReport: ' . Dumper(\%sqlidsToReport) . "\n";
 # update the list of plan-flips found
 
-my $fh = IO::File->new($alertLogCSV,'w') or die "could not open $alertLogCSV = $!";
-foreach my $sqlid ( keys %alerts ) {
-	print $fh "$sqlid,$alerts{$sqlid}\n";
-}
-$fh->close;
+saveAlertTimes($alertLogCSV,\%alerts) if $saveAlerts;
+
+# this is the report or csv
+print "$stdoutDATA";
+warn "\nSTDERR: $stderrDATA\n" if $stderrDATA;
 
 if ($sendAlerts && %sqlidsToReport ) {
 	warn "Sending alerts!\n";
@@ -321,6 +322,7 @@ if ($sendAlerts && %sqlidsToReport ) {
 	foreach my $sqlid ( keys %sqlidsToReport ) {
 		$emailConfig{mailmsg} .= "\nsql_id: $sqlid";
 	}
+	$emailConfig{mailmsg} .= "$stdoutDATA\n";
 	sendAlert(\%emailConfig);
 }
 
@@ -328,17 +330,18 @@ $dbh->disconnect;
 
 exit;
 
-#c13sma6rkr27c   31,692,872 SOE                        0.0       4        0.0064137        0.0113004       0.0020        0.3187
+#c13sma6rkr27c 234234234234   31,692,872 SOE                        0.0       4        0.0064137        0.0113004       0.0020        0.3187
 format STDOUT_TOP = 
-                                                             PLAN
-SQL_ID               EXECS USERNAME               AVG_LIO   COUNT        MIN_ETIME        MAX_ETIME     STDDEV_ETIME      NORM_STDDEV
-------------- ------------ --------------- -------------- ------- ---------------- ---------------- ---------------- ----------------
+                                                                          PLAN
+SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT        MIN_ETIME        MAX_ETIME     STDDEV_ETIME      NORM_STDDEV
+------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ---------------- ----------------
 .
 
 format STDOUT =
-@<<<<<<<<<<<< @########### @<<<<<<<<<<<<< @##########.###  @##### @#######.####### @#######.####### @#######.####### @#######.#######
+@<<<<<<<<<<<< @########### @########### @<<<<<<<<<<<<< @##########.###  @##### @#######.####### @#######.####### @#######.####### @#######.#######
 @{$ary}
 .
+
 
 ##################################
 ### end of main                ###
@@ -383,6 +386,8 @@ Using the defaults gets a report that may be used to tune the values for --min-s
   --min-stddev    minimum value of normalized stddev exe times to look for - defaults to 0.001
   --max-exe-time  minimum value of max execution time to look for  - defaults to 0.001
   --send-alerts   send alert emails - default is to not send alerts
+  --save-alerts   save alert history - default is to not save alert history
+                  when used with --send-alerts and --alert-freq it is used to control when alerts are sent
   --alert-freq    how many seconds until the next alert is sent for a SQL_ID. default is 86400
   --sysoper       logon as sysoper
   --local-sysdba  logon to local instance as sysdba. ORACLE_SID must be set
@@ -486,9 +491,54 @@ sub isDateValid {
 	}
 }
 
+sub getConfigs {
+	my ($configFile) = @_;
+
+	if ( -r $configFile ) {
+
+		my $fh = IO::File->new($configFile,'r') or die "could not open $configFile = $!";
+		my @config=<$fh>;
+		my $cmd=join('',@config);
+		#print "cmd: $cmd\n";
+		eval $cmd;
+
+		if ($@) {
+			warn "Error!\n";
+			die "error processing configfile: $configFile - $!\n";
+		}
+		$fh->close;
+	}
+}
+
 sub getEpoch {
 	return timelocal(localtime);
 }
+
+sub saveAlertTimes {
+	my ($alertLogName, $alertsHashRef) = @_;
+	my $fh = IO::File->new($alertLogCSV,'w') or die "could not open $alertLogCSV for writing - $!\n";
+	foreach my $sqlid ( sort keys %alerts ) {
+		my %plans = %{$alerts{$sqlid}};
+		foreach my $planHash ( sort keys %plans ) {
+			print $fh "$sqlid,$planHash,$alerts{$sqlid}->{$planHash}\n";
+		}
+	}
+	$fh->close;
+}
+
+sub getAlertTimes {
+	my ($alertLogName, $alertsHashRef) = @_;
+	if ( -r $alertLogName ) {
+		my $fh = IO::File->new($alertLogName,'r') or die "could not open $alertLogName - $!\n";
+		while (<$fh>) {
+			chomp;
+			my ($sqlid,$planHash,$alertTime)=split(',');
+			$alertsHashRef->{$sqlid}{$planHash} = $alertTime;
+		}
+		$fh->close;
+	}
+}
+
 
 sub sendAlert {
 	my %alertInfo = %{$_[0]};
@@ -499,4 +549,15 @@ sub sendAlert {
 		$alertInfo{mailmsg},
 	);
 }
+
+# send a string
+sub debugWarn {
+	warn "$_[0]" if $DEBUG;
+}
+
+# send a string
+sub debugPrint {
+	print "$_[0]" if $DEBUG;
+}
+
 
