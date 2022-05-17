@@ -8,6 +8,8 @@ use FileHandle;
 use DBI;
 use Getopt::Long;
 use Data::Dumper;
+use Time::Local;
+use IO::File;
 use Cwd qw/abs_path/ ;
 
 my $scriptPath;
@@ -32,6 +34,7 @@ BEGIN {
 
 use lib "$scriptPath/lib";
 use Unstable::Plans::SQL;
+use Mail::Simple;
 
 #exit;
 
@@ -47,6 +50,55 @@ my $timeScope='historic';
 my $realtime=0;
 my $defMinNormStddev=0.001;
 my $defMinimumMaxEtime=0.001;
+my $sendAlerts=0;
+
+# saves sql_id and time alerted
+my $alertLogCSV='./poc-plan-flip.csv';
+
+# if alerted for a SQL_ID, do not alert again for this many seconds
+my $alertFrequency=86400;
+
+# see planflip.conf
+my %emailConfig;
+
+# load any configs in planflip.conf
+
+my $configFile="$scriptPath/planflip.conf";
+
+if ( -r $configFile ) {
+	my $fh = IO::File->new($configFile,'r') or die "could not open $configFile = $!";
+	my @config=<$fh>;
+	my $cmd=join('',@config);
+	#print "cmd: $cmd\n";
+	eval $cmd;
+
+	if ($@) {
+		warn "Error!\n";
+		die "error processing configfile: $configFile - $!\n";
+	}
+	$fh->close;
+
+}
+
+my %alerts=();
+
+if ( -r $alertLogCSV ) {
+	my $fh = IO::File->new($alertLogCSV,'r') or die "could not open $alertLogCSV = $!";
+	while (<$fh>) {
+		chomp;
+		my ($sqlid,$alertTime)=split(',');
+		$alerts{$sqlid} = $alertTime;
+	}
+	$fh->close;
+}
+
+#print Dumper(\%emailConfig);
+# test the alert
+#$emailConfig{mailsubject} = "unstable plan for sql_id: asdfas234234s";
+#$emailConfig{mailmsg} = "sql_id: asdfas234234s found to be unstable";
+#sendAlert(\%emailConfig);
+
+#exit;
 
 my %optctl = ();
 
@@ -67,6 +119,8 @@ Getopt::Long::GetOptions(
 	"end-time=s" => \$snapEndTime,
 	"csv!" => \$csvOutput,
 	"csv-delimiter=s" => \$csvDelimiter,
+	"send-alerts!" => \$sendAlerts,
+	"alert-freq=n" => \$alertFrequency,
 	"sysdba!",
 	"realtime!" => \$realtime,
 	"local-sysdba!",
@@ -204,8 +258,14 @@ my $decimalFactor=10**$decimalPlaces;
 
 my $ary;
 my $csvHdrPrinted=0;
+my %sqlidsToReport=();
+my $currentTime=getEpoch();
+print "Epoch: $currentTime\n";
+
 while ( $ary = $sth->fetchrow_arrayref ) {
 	#print join(' - ',@{$ary}) . "\n";
+	my $sqlid = $ary->[0];
+
 	if ($csvOutput) {
 		# should not be any undef or null values in this array
 		if ( ! $csvHdrPrinted ) {
@@ -230,6 +290,38 @@ while ( $ary = $sth->fetchrow_arrayref ) {
 	} else {
 		write;
 	}
+
+	#warn "SQLID: $sqlid\n";
+	if ( exists $alerts{$sqlid} ) {
+		# determine if the last time reported should be updated
+		if ( $alerts{$sqlid} - $currentTime > $alertFrequency ) {
+			$alerts{$sqlid} = $currentTime;
+			$sqlidsToReport{$sqlid} = $currentTime;
+		}
+	} else {
+		$alerts{$sqlid} = $currentTime;
+		$sqlidsToReport{$sqlid} = $currentTime;
+	}
+
+}
+
+#print '%sqlidsToReport: ' . Dumper(\%sqlidsToReport) . "\n";
+# update the list of plan-flips found
+
+my $fh = IO::File->new($alertLogCSV,'w') or die "could not open $alertLogCSV = $!";
+foreach my $sqlid ( keys %alerts ) {
+	print $fh "$sqlid,$alerts{$sqlid}\n";
+}
+$fh->close;
+
+if ($sendAlerts && %sqlidsToReport ) {
+	warn "Sending alerts!\n";
+	$emailConfig{mailsubject} = "unstable plan report";
+	$emailConfig{mailmsg} = '';
+	foreach my $sqlid ( keys %sqlidsToReport ) {
+		$emailConfig{mailmsg} .= "\nsql_id: $sqlid";
+	}
+	sendAlert(\%emailConfig);
 }
 
 $dbh->disconnect;
@@ -290,6 +382,8 @@ Using the defaults gets a report that may be used to tune the values for --min-s
                   the --begin-time and --end-time arguments are ignored
   --min-stddev    minimum value of normalized stddev exe times to look for - defaults to 0.001
   --max-exe-time  minimum value of max execution time to look for  - defaults to 0.001
+  --send-alerts   send alert emails - default is to not send alerts
+  --alert-freq    how many seconds until the next alert is sent for a SQL_ID. default is 86400
   --sysoper       logon as sysoper
   --local-sysdba  logon to local instance as sysdba. ORACLE_SID must be set
                   the following options will be ignored:
@@ -392,4 +486,17 @@ sub isDateValid {
 	}
 }
 
+sub getEpoch {
+	return timelocal(localtime);
+}
+
+sub sendAlert {
+	my %alertInfo = %{$_[0]};
+	mailit(
+		$alertInfo{mailto},
+		$alertInfo{mailfrom},
+		$alertInfo{mailsubject},
+		$alertInfo{mailmsg},
+	);
+}
 
