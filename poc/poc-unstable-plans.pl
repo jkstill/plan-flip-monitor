@@ -275,7 +275,15 @@ if ($@) {
 
 # print sql and exit if requested
 if ($dumpSqlOnly) {
+
+	$sql =~ s/:5/'$timestampFormat'/g;
+	$sql =~ s/:3/'$snapStartTime'/g;
+	$sql =~ s/:4/'$snapEndTime'/g;
+	$sql =~ s/:1/$defMinNormStddev/g;
+	$sql =~ s/:2/$defMinimumMaxEtime/g;
+
 	print "$sql\n";
+
 	$dbh->disconnect;
 	exit 0;
 }
