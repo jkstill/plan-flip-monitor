@@ -9,7 +9,7 @@ use Data::Dumper;
 
 sub getSql{
 	my ($sqlName,$dbType) = @_;
-	print "SQL NAME: $sqlName\n";
+	#print "SQL NAME: $sqlName\n";
 	#print Dumper(\%SQL::sql);
 
 	my $sql =  $SQL::sql{$sqlName};
