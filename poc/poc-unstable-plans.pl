@@ -6,7 +6,7 @@ use warnings;
 use strict;
 use FileHandle;
 use DBI;
-use Getopt::Long;
+use Getopt::Long qw(GetOptionsFromArray);
 use Data::Dumper;
 use Pod::Usage;
 use Time::Local;
@@ -55,39 +55,87 @@ my $defMinimumMaxEtime=0.001;
 my $sendAlerts=0;
 my $saveAlerts=0;
 my $DEBUG=0;
+my $dumpSqlOnly=0;
+my $configFile='planflip.conf';
+my($db, $username, $password, $connectionMode, $localSysdba);
+# if alerted for a SQL_ID, do not alert again for this many seconds
+my $alertFrequency=86400;
+my %optctl = ();
+
+# this is set automatically in the program
+# the --dbtype option can be used to force the dbtype: CONTAINER or LEGACY
+# this is useful with --dumpsql for testing
+my $dbType=''; 
+
+
+# get the config file early if supplied as an option
+# options are being retrieved twice
+# the GetOptionsFromArray method is being used just to get the config-file, 
+# as we need it before processing command line options
+#
+# we do not care about the other options, but leaving them off throws warnings
+# the GetOptionsFromArray does not remove anything from @ARGV, and so the later
+# call to Getopt::Long::Getoptions will properly handle @ARGV
+my $ret = GetOptionsFromArray(\@ARGV,
+	\%optctl,
+	"config-file=s" => \$configFile,
+	"database=s" => \$db,
+	"username=s" => \$username,
+	"password=s" => \$password,
+	"begin-time=s" => \$snapStartTime,
+  	"min-stddev=f" => \$defMinNormStddev,
+  	"max-exe-time=f" => \$defMinimumMaxEtime,
+	"end-time=s" => \$snapEndTime,
+	"csv!" => \$csvOutput,
+	"csv-delimiter=s" => \$csvDelimiter,
+	"send-alerts!" => \$sendAlerts,
+	"save-alerts!" => \$saveAlerts,
+	"alert-freq=n" => \$alertFrequency,
+	"dumpsql!", => \$dumpSqlOnly,
+	"dbtype=s", => \$dbType,
+	"sysdba!",
+	"realtime!" => \$realtime,
+	"local-sysdba!",
+	"sysoper!",
+	"debug!" => \$DEBUG,
+	'help!'    => sub { pod2usage( -verbose => 1 ) },
+	'man!'     => sub { pod2usage( -verbose => 2 ) },
+	#"z|h|help" => \$help 
+) or pod2usage( -verbose => 1 );
 
 # saves sql_id and time alerted
 my $alertLogCSV="$scriptPath/poc-plan-flip.csv";
 
-# if alerted for a SQL_ID, do not alert again for this many seconds
-my $alertFrequency=86400;
-
-# see planflip.conf
-my %emailConfig;
+# this hash is simply a stub to keep the script from breaking if planflip.conf is not available
+# see planflip.conf and 'poc-unstable-plans.pl --man' for more information
+my %emailConfig = (
+        mailfrom => 'fakeaddress@somedomain.com',
+        mailto => 'dba01@somedomain.com,dba02@somedomain.com',
+        mailsubject => 'unstable plans report',
+        mailmsg => 'this is the body of the email. it is replaced in the program ',
+);
 
 # load any configs in planflip.conf
 
-my $configFile="$scriptPath/planflip.conf";
+$configFile="$scriptPath/$configFile";
 
 getConfigs($configFile);
-
 
 my %alerts=();
 
 getAlertTimes($alertLogCSV,\%alerts);
 
-#print Dumper(\%emailConfig);
+debugWarn(Dumper(\%emailConfig));
+debugWarn("configFile: $configFile\n");
+#exit;
+
 # test the alert
 #$emailConfig{mailsubject} = "unstable plan for sql_id: asdfas234234s";
 #$emailConfig{mailmsg} = "sql_id: asdfas234234s found to be unstable";
 #sendAlert(\%emailConfig);
-
 #print Dumper(\%alerts);
 #exit;
 
-my %optctl = ();
-
-my($db, $username, $password, $connectionMode, $localSysdba);
 my($adjustCols);
 $adjustCols=0;
 my $sysdba=0;
@@ -107,6 +155,8 @@ Getopt::Long::GetOptions(
 	"send-alerts!" => \$sendAlerts,
 	"save-alerts!" => \$saveAlerts,
 	"alert-freq=n" => \$alertFrequency,
+	"dumpsql!", => \$dumpSqlOnly,
+	"dbtype=s", => \$dbType,
 	"sysdba!",
 	"realtime!" => \$realtime,
 	"local-sysdba!",
@@ -116,6 +166,7 @@ Getopt::Long::GetOptions(
 	'man!'     => sub { pod2usage( -verbose => 2 ) },
 	#"z|h|help" => \$help 
 ) or pod2usage( -verbose => 1 );
+
 
 $localSysdba=$optctl{'local-sysdba'};
 
@@ -127,11 +178,11 @@ if ( $realtime ) {
 } else {
 	if ( ! isDateValid($snapStartTime)) {
 		warn "invalid date: $snapStartTime\n";
-		usage(1);
+		pod2usage( -verbose => 1 );
 	}
 	if ( ! isDateValid($snapEndTime)) {
 		warn "invalid date: $snapEndTime\n";
-		usage(1);
+		pod2usage( -verbose => 1 );
 	}
 }
 
@@ -141,7 +192,8 @@ if (! $localSysdba) {
 	if ( $optctl{sysoper} ) { $connectionMode = 4 }
 	if ( $optctl{sysdba} ) { $connectionMode = 2 }
 
-	usage(1) unless ($db and $username and $password);
+	pod2usage( -verbose => 1 ) 
+		unless ($db and $username and $password);
 }
 
 
@@ -157,8 +209,6 @@ if (! $localSysdba) {
 
 
 $|=1; # flush output immediately
-
-sub getOraVersion($$$);
 
 my $dbh ;
 
@@ -199,25 +249,41 @@ getOraVersion (
 );
 
 ## LEGACY or CONTAINER
-my $dbType = getDbType($dbh,$majorOraVersion);
+
+# if set manually, dbtype can only be CONTAINER|LEGACY
+if ( $dbType ) {
+	unless  ( $dbType =~ /CONTAINER|LEGACY/ ) {
+		die "'--dbType $dbType' - this parameter must be CONTAINER or LEGACY\n";
+	}
+} else {
+	$dbType = getDbType($dbh,$majorOraVersion);
+}
+
+# get the SQL statement for checking unstable plans
+my $sql='';
+my $sqlName="unstable-plans-baseline-${timeScope}";
+
+
+eval {
+	$sql = SQL::getSql($sqlName,$dbType);
+	die unless $sql;
+};
+
+if ($@) {
+	die "failed to get SQL '$sqlName'\n";
+}
+
+# print sql and exit if requested
+if ($dumpSqlOnly) {
+	print "$sql\n";
+	$dbh->disconnect;
+	exit 0;
+}
 
 if ( ! $csvOutput ) {
 	print "Major/Minor version $majorOraVersion/$minorOraVersion\n";
 }
 my $dbVersion="${majorOraVersion}.${minorOraVersion}" * 1; # convert to number
-
-my $sql='';
-my $sqlName="unstable-plans-baseline-${timeScope}-${dbType}";
-
-eval {
-	$sql = SQL::getSql($sqlName);
-	die unless $sql;
-};
-
-if ($@) {
-	$dbh->disconnect;
-	die "failed to get SQL '$sqlName'\n";
-}
 
 #print qq(testsql: $sql\n);
 my $sth=$dbh->prepare($sql);
@@ -226,7 +292,7 @@ if ( ! $csvOutput ) {
 
 	print qq{
 
- running query for $sqlName
+ running query for $sqlName-$dbType
 };
 	if ( ! $realtime ) {
 		print qq{
@@ -504,6 +570,27 @@ format STDOUT =
 
 =over
 
+=item --help
+
+ some help
+
+=item --man
+
+ even more help
+
+ save man pages to a file:  
+ 
+   $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --man  | tr -d '\033/' | sed -r -e 's/\[[01]m//g' > poc-unstable-plans.txt
+
+ when using the Perl in older distributions of Oracle, such as 12.1, the --man argument may not work
+
+ in that case, use perldoc
+
+   $ORACLE_HOME/perl/bin/perldoc ./poc-unstable-plans.pl | col -b  > poc-unstable-plans.txt
+
+=item --config-file
+
+ use this option to choose a configuration file other than the default 'planflip.conf'
 
 =item --database target instance
 
@@ -528,6 +615,22 @@ format STDOUT =
 
  switch to CSV output
 
+=item --dumpsql
+
+ print the SQL statement used to look for unstable plans, and exit
+
+ it is necessary to logon to the database to determine the type of database, so credentials and tnsname are required
+
+ see also --dbtype
+
+=item --dbtype
+
+
+ manually set the type of database. 
+ 
+ this is mostly useful in testing, such as when examining the SQL statement used to check for poorly performing SQL
+
+ see also --dumpsql
 
 =item --begin-time
 
@@ -629,6 +732,10 @@ when used with --send-alerts and --alert-freq it is used to control when alerts 
 
 =head1 Suggested Strategy
 
+ configure email in planflip.conf
+ 
+ the 'poc-mail-simple.pl' script can be used to test if email will work
+
  * find a period that represents decent performance with the --begin-time and --end-time options
  * use the --save-alerts option
  * use cron or a scheduler to run with these options
@@ -676,7 +783,7 @@ if ( $majorOraVersion >= 12 ) {
 }
 }
 
-sub getOraVersion($$$) {
+sub getOraVersion {
 	my ($dbh,$major,$minor) = @_;
 
 	my $sql=q{select
