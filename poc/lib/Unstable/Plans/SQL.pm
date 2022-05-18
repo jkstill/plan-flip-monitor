@@ -150,7 +150,8 @@ where username not in
    from system.LOGSTDBY$SKIP_SUPPORT
    where action = 0
 )
-order by norm_stddev},
+order by sql_id, plan_hash_value},
+#order by norm_stddev},
 # end of unstable-plans-baseline-CONTAINER
 
 	'unstable-plans-baseline-historic-LEGACY' => q{with
@@ -267,7 +268,8 @@ where username not in
    from system.LOGSTDBY$SKIP_SUPPORT
    where action = 0
 )
-order by norm_stddev},
+order by sql_id, plan_hash_value},
+#order by norm_stddev},
 # end of unstable-plans-baseline-LEGACY
 
 	'unstable-plans-baseline-realtime-CONTAINER' => q{with
@@ -366,7 +368,8 @@ where username not in
    from system.LOGSTDBY$SKIP_SUPPORT
    where action = 0
 )
-order by norm_stddev},
+order by sql_id, plan_hash_value},
+#order by norm_stddev},
 # end of unstable-plans-baseline-CONTAINER
 
 	'unstable-plans-baseline-realtime-LEGACY' => q{with
@@ -465,7 +468,8 @@ where username not in
    from system.LOGSTDBY$SKIP_SUPPORT
    where action = 0
 )
-order by norm_stddev},
+order by sql_id, plan_hash_value},
+#order by norm_stddev},
 # end of unstable-plans-baseline-LEGACY
 
 
