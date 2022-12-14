@@ -16,7 +16,7 @@ Before doing that however, use the following script to generate statistics, and 
 
 Use the `gather-stats-normal.sql` script to gather statistics.
 
-The method used leaves it up toe Oracle as to which statistics are gathered.
+The method used leaves it up to Oracle as to which statistics are gathered.
 
 The only optional directive used is `gather-stats-normal.sql`.
 
@@ -518,9 +518,18 @@ PL/SQL procedure successfully completed.
 SQL> Disconnected from Oracle Database 19c Enterprise Edition Release 19.0.0.0.0 - Production
 ```
 
-## Generate Fake Statistics
+## Set Fake Statistics
 
+Statistics can be set purposely to cause Oracle to use 'bad' execution plans for queries.
 
+### Inflate Statistic Values
 
+[set-stats-01/set-stats.sql](./set-stats-01/set-stats.sql)
+
+### Deflate Statistic Values
+
+This set of object statistics will cause Oracle to use wildly innappropriate execution plans.
+
+[set-stats-02/set-stats.sql](./set-stats-02/set-stats.sql)
 
 
