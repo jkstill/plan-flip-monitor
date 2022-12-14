@@ -65,8 +65,6 @@ rawdata as
 	select
 		sql_id
 		, plan_hash_value
-		-- the avg_etime and avg_lio bits were found in a Kerry Osborne script, unstable_plans.sql
-		-- thanks Kerry, it saved me a bit of time :)
 		, sum( nvl( executions_delta, 0 ) ) execs
 		, (
 			sum(elapsed_time_delta) /
