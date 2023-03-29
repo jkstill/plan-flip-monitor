@@ -36,7 +36,7 @@ The scripts used for generating, exporting and importing Oracle Database statist
 
    [statops](https://github.com/jkstill/statops)
 
-Once [statops](https://github.com/jkstill/statops) is installed, cd to the ~/oracle/dba/statops directory to run the following scripts.
+Once [statops](https://github.com/jkstill/statops) is installed, cd to the ~/oracle/dba/statistics/statops directory to run the following scripts.
 
 ### Create The Statistics Table
 

@@ -50,7 +50,7 @@ my $csvOutput=0;
 my $csvDelimiter=',';
 my $timeScope='historic';
 my $realtime=0;
-my $defMinNormStddev=0.001;
+my $defMinStddev=0.001;
 my $defMinimumMaxEtime=0.001;
 my $sendAlerts=0;
 my $saveAlerts=0;
@@ -83,7 +83,7 @@ my $ret = GetOptionsFromArray(\@ARGV,
 	"username=s" => \$username,
 	"password=s" => \$password,
 	"begin-time=s" => \$snapStartTime,
-  	"min-stddev=f" => \$defMinNormStddev,
+  	"min-stddev=f" => \$defMinStddev,
   	"max-exe-time=f" => \$defMinimumMaxEtime,
 	"end-time=s" => \$snapEndTime,
 	"csv!" => \$csvOutput,
@@ -147,7 +147,7 @@ Getopt::Long::GetOptions(
 	"username=s" => \$username,
 	"password=s" => \$password,
 	"begin-time=s" => \$snapStartTime,
-  	"min-stddev=f" => \$defMinNormStddev,
+  	"min-stddev=f" => \$defMinStddev,
   	"max-exe-time=f" => \$defMinimumMaxEtime,
 	"end-time=s" => \$snapEndTime,
 	"csv!" => \$csvOutput,
@@ -276,11 +276,10 @@ if ($@) {
 # print sql and exit if requested
 if ($dumpSqlOnly) {
 
-	$sql =~ s/:5/'$timestampFormat'/g;
-	$sql =~ s/:3/'$snapStartTime'/g;
-	$sql =~ s/:4/'$snapEndTime'/g;
-	$sql =~ s/:1/$defMinNormStddev/g;
-	$sql =~ s/:2/$defMinimumMaxEtime/g;
+	$sql =~ s/:4/'$timestampFormat'/g;
+	$sql =~ s/:2/'$snapStartTime'/g;
+	$sql =~ s/:3/'$snapEndTime'/g;
+	$sql =~ s/:1/$defMinStddev/g;
 
 	print "$sql\n";
 
@@ -312,9 +311,9 @@ if ( ! $csvOutput ) {
 }
 
 if ($realtime) {
-	$sth->execute($defMinNormStddev,$defMinimumMaxEtime);
+	$sth->execute($defMinStddev);
 } else {
-	$sth->execute($defMinNormStddev,$defMinimumMaxEtime,$snapStartTime, $snapEndTime, $timestampFormat);
+	$sth->execute($defMinStddev,$snapStartTime, $snapEndTime, $timestampFormat);
 }
 
 my $decimalPlaces=6;
@@ -411,12 +410,12 @@ exit;
 #c13sma6rkr27c 234234234234   31,692,872 SOE                        0.0       4        0.0064137        0.0113004       0.0020        0.3187
 format STDOUT_TOP = 
                                                                           PLAN
-SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT        MIN_ETIME        MAX_ETIME     STDDEV_ETIME      NORM_STDDEV
-------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ---------------- ----------------
+SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT        MIN_ETIME        MAX_ETIME     STDDEV_ETIME
+------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ----------------
 .
 
 format STDOUT =
-@<<<<<<<<<<<< @########### @########### @<<<<<<<<<<<<< @##########.###  @##### @#######.####### @#######.####### @#######.####### @#######.#######
+@<<<<<<<<<<<< @########### @########### @<<<<<<<<<<<<< @##########.###  @##### @#######.####### @#######.####### @#######.#######
 @{$ary}
 .
 
@@ -729,7 +728,7 @@ when used with --send-alerts and --alert-freq it is used to control when alerts 
    #$csvDelimiter='|';
    #$timeScope='realtime';
    #$realtime=1;
-   #$defMinNormStddev=0.010;
+   #$defMinStddev=0.010;
    #$defMinimumMaxEtime=0.5;
 
 =head1 Sending Mail
