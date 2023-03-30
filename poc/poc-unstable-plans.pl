@@ -46,12 +46,13 @@ my $timestampFormat = 'yyyy-mm-dd hh24:mi:ss';
 #my $snapEndTime = '2022-05-31 00:00:00';
 my $snapStartTime='';
 my $snapEndTime='';
+my $referenceFile='';
+my $saveReferenceFile='';
 my $csvOutput=0;
 my $csvDelimiter=',';
 my $timeScope='historic';
 my $realtime=0;
 my $defMinStddev=0.001;
-my $defMinimumMaxEtime=0.001;
 my $sendAlerts=0;
 my $saveAlerts=0;
 my $DEBUG=0;
@@ -84,12 +85,13 @@ my $ret = GetOptionsFromArray(\@ARGV,
 	"password=s" => \$password,
 	"begin-time=s" => \$snapStartTime,
   	"min-stddev=f" => \$defMinStddev,
-  	"max-exe-time=f" => \$defMinimumMaxEtime,
 	"end-time=s" => \$snapEndTime,
 	"csv!" => \$csvOutput,
 	"csv-delimiter=s" => \$csvDelimiter,
 	"send-alerts!" => \$sendAlerts,
 	"save-alerts!" => \$saveAlerts,
+	"reference-file=s" => \$referenceFile,
+	"save-reference-file=s" => \$saveReferenceFile,
 	"alert-freq=n" => \$alertFrequency,
 	"dumpsql!", => \$dumpSqlOnly,
 	"dbtype=s", => \$dbType,
@@ -148,12 +150,13 @@ Getopt::Long::GetOptions(
 	"password=s" => \$password,
 	"begin-time=s" => \$snapStartTime,
   	"min-stddev=f" => \$defMinStddev,
-  	"max-exe-time=f" => \$defMinimumMaxEtime,
 	"end-time=s" => \$snapEndTime,
 	"csv!" => \$csvOutput,
 	"csv-delimiter=s" => \$csvDelimiter,
 	"send-alerts!" => \$sendAlerts,
 	"save-alerts!" => \$saveAlerts,
+	"reference-file=s" => \$referenceFile,
+	"save-reference-file=s" => \$saveReferenceFile,
 	"alert-freq=n" => \$alertFrequency,
 	"dumpsql!", => \$dumpSqlOnly,
 	"dbtype=s", => \$dbType,
@@ -173,9 +176,7 @@ $localSysdba=$optctl{'local-sysdba'};
 if ( $help ){ usage(0); }
 
 # if realtime we do not care about start and stop times
-if ( $realtime ) {
-	$timeScope='realtime';
-} else {
+if ( $snapStartTime or $snapEndTime ) { # read history data from file
 	if ( ! isDateValid($snapStartTime)) {
 		warn "invalid date: $snapStartTime\n";
 		pod2usage( -verbose => 1 );
@@ -184,6 +185,11 @@ if ( $realtime ) {
 		warn "invalid date: $snapEndTime\n";
 		pod2usage( -verbose => 1 );
 	}
+}
+
+my $refFileFH;
+if ($saveReferenceFile) {
+	$refFileFH = IO::File->new($saveReferenceFile,'w') or die "could not open $saveReferenceFile for writing - $!\n";
 }
 
 if (! $localSysdba) {
@@ -260,28 +266,34 @@ if ( $dbType ) {
 }
 
 # get the SQL statement for checking unstable plans
-my $sql='';
-my $sqlName="unstable-plans-baseline-${timeScope}";
+my $historicSQL='';
+my $realtimeSQL='';
+my $historicSqlName="unstable-plans-baseline-historic";
+my $realtimeSqlName="unstable-plans-baseline-realtime";
 
 
 eval {
-	$sql = SQL::getSql($sqlName,$dbType);
-	die unless $sql;
+	$historicSQL = SQL::getSql($historicSqlName,$dbType);
+	die unless $historicSQL;
+	$realtimeSQL = SQL::getSql($realtimeSqlName,$dbType);
+	die unless $realtimeSQL;
 };
 
 if ($@) {
-	die "failed to get SQL '$sqlName'\n";
+	die "failed to get SQL\n";
 }
 
 # print sql and exit if requested
 if ($dumpSqlOnly) {
 
-	$sql =~ s/:4/'$timestampFormat'/g;
-	$sql =~ s/:2/'$snapStartTime'/g;
-	$sql =~ s/:3/'$snapEndTime'/g;
-	$sql =~ s/:1/$defMinStddev/g;
+	$historicSQL =~ s/:4/'$timestampFormat'/g;
+	$historicSQL =~ s/:2/'$snapStartTime'/g;
+	$historicSQL =~ s/:3/'$snapEndTime'/g;
+	$historicSQL =~ s/:1/$defMinStddev/g;
 
-	print "$sql\n";
+	print "$historicSQL;\n";
+	print "\n";
+	print "$realtimeSQL;\n";
 
 	$dbh->disconnect;
 	exit 0;
@@ -293,28 +305,26 @@ if ( ! $csvOutput ) {
 my $dbVersion="${majorOraVersion}.${minorOraVersion}" * 1; # convert to number
 
 #print qq(testsql: $sql\n);
-my $sth=$dbh->prepare($sql);
+my $historicSTH=$dbh->prepare($historicSQL);
+my $realtimeSTH=$dbh->prepare($realtimeSQL);
 
 if ( ! $csvOutput ) {
 
 	print qq{
 
- running query for $sqlName-$dbType
+ running query for $historicSqlName-$dbType
 };
-	if ( ! $realtime ) {
+	if ( $snapStartTime or $snapEndTime ) { # read history data from file
 		print qq{
   format: $timestampFormat
    start: $snapStartTime
      end: $snapEndTime
 };
-};
+	};
 }
 
-if ($realtime) {
-	$sth->execute($defMinStddev);
-} else {
-	$sth->execute($defMinStddev,$snapStartTime, $snapEndTime, $timestampFormat);
-}
+$realtimeSTH->execute;
+$historicSTH->execute($defMinStddev,$snapStartTime, $snapEndTime, $timestampFormat);
 
 my $decimalPlaces=6;
 my $decimalFactor=10**$decimalPlaces;
@@ -326,8 +336,38 @@ my $currentTime=getEpoch();
 my $resultsReport='';  # if sending alerts, capture the report from write to STDOUT[_TOP|
 print "Epoch: $currentTime\n" unless $csvOutput;
 
-# capture the output from write
+my ($realtimeData,$historicData);
 
+print join(qq/ /, @{ $realtimeSTH->{NAME_lc} }) . "\n";
+while ( my @ary = $realtimeSTH->fetchrow_array ) {
+	print join(' - ',@ary) . "\n";
+	# key is sql_id + phv
+	foreach my $i ( (4,6,7) ) { $ary[$i] = sprintf("%9.${decimalPlaces}f", $ary[$i]); }
+	$realtimeData->{$ary[0] . $ary[1]} = \@ary;
+}
+print "\n";
+
+print join(qq/ /, @{ $historicSTH->{NAME_lc} }) . "\n";
+while ( my @ary = $historicSTH->fetchrow_array ) {
+	print join(' - ',@ary) . "\n";
+	foreach my $i ( (4,6,7) ) { $ary[$i] = sprintf("%9.${decimalPlaces}f", $ary[$i]); }
+	$historicData->{$ary[0] . $ary[1]} = \@ary;
+}
+print "\n";
+
+my  @names = map { scalar $dbh->type_info($_)->{TYPE_NAME} } @{ $historicSTH->{TYPE} };
+
+print Dumper($realtimeData);
+print Dumper($historicData);
+print Dumper(\@names);
+
+
+# now compare the real time data to the historic data
+# START HERE!
+
+=head1
+
+# capture the output from write
 my ($stdoutDATA, $stderrDATA, @result) = capture {
 
 	while ( $ary = $sth->fetchrow_arrayref ) {
@@ -382,11 +422,13 @@ my ($stdoutDATA, $stderrDATA, @result) = capture {
 	}
 };
 
+
 print '@result: ' . Dumper(\@result) . "\n" if defined($result[0]);;
 #print '%sqlidsToReport: ' . Dumper(\%sqlidsToReport) . "\n";
 # update the list of plan-flips found
 
 saveAlertTimes($alertLogCSV,\%alerts) if $saveAlerts;
+
 
 # this is the report or csv
 print "$stdoutDATA";
@@ -402,6 +444,8 @@ if ($sendAlerts && %sqlidsToReport ) {
 	$emailConfig{mailmsg} .= "$stdoutDATA\n";
 	sendAlert(\%emailConfig);
 }
+
+=cut
 
 $dbh->disconnect;
 
@@ -441,7 +485,6 @@ format STDOUT =
  The script will report on SQL statements where these criteria are met:
 
    --min-stddev   normalized stddev of execution time is N.N of stddev - default is 0.001
-   --max-exe-time the maximum execution time is N.N seconds or more - default is 0.001
 
  The defaults will likely catch a few SQL statements.  
 
@@ -482,9 +525,7 @@ format STDOUT =
 
  The previous command used the '--min-stddev 20' argument to limit the SQL found.
 
- The '-max-exe-time 3' option is now used to show only those SQL statements that at some time in this period had an elapsed time exceeding 3 seconds.
-
- $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --database //rac-scan/swingbench --username somedba --password XXX --begin-time '2022-05-10 00:00:00' --end-time '2022-05-12 23:00:00'  --min-stddev  20 --max-exe-time 3
+ $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --database //rac-scan/swingbench --username somedba --password XXX --begin-time '2022-05-10 00:00:00' --end-time '2022-05-12 23:00:00'  --min-stddev  20 
  Major/Minor version 19/0
 
   running query for unstable-plans-baseline-historic-CONTAINER
@@ -504,7 +545,7 @@ format STDOUT =
 
  Doing so will save the sql_id, plan_hash_value, and the current time to poc-plan-flip.csv file.
 
- $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --database //rac-scan/swingbench --username somedba --password XXX --begin-time '2022-05-10 00:00:00' --end-time '2022-05-12 23:00:00'  --min-stddev  20 --max-exe-time 3
+ $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --database //rac-scan/swingbench --username somedba --password XXX --begin-time '2022-05-10 00:00:00' --end-time '2022-05-12 23:00:00'  --min-stddev  20 
  Major/Minor version 19/0
 
   running query for unstable-plans-baseline-historic-CONTAINER
@@ -531,7 +572,7 @@ format STDOUT =
 
  The '--realtime' option can now be used to look for SQL statements whose execution time has become excessive.
 
- $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --realtime --database //rac-scan/swingbench --username somedba --password XXX  --min-stddev  20 --max-exe-time 3 --save-alerts --send-alerts 
+ $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --realtime --database //rac-scan/swingbench --username somedba --password XXX  --min-stddev  20 --save-alerts --send-alerts 
  
  $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --realtime --database //rac-scan/swingbench --username jkstill --password XXX realtime --send-alerts --save-alerts  --min-stddev 0.05
  Major/Minor version 19/0
@@ -632,7 +673,6 @@ format STDOUT =
 
 =item --dbtype
 
-
  manually set the type of database. 
  
  this is mostly useful in testing, such as when examining the SQL statement used to check for poorly performing SQL
@@ -648,20 +688,29 @@ format STDOUT =
 
  latest time to check AWR, in 'YYYY-MM-DD HH24:MI:SS' format
 
+=item --reference-file
+
+ When the --realtime option is used, the current sql execution times are compared to a reference.
+
+ If the --reference-file <filename> option is used, then the reference data comes from this file.
+
+ When --reference-file is used, the --begin-time and --end-time arguments are ignored.
 
 =item --realtime
 
- look at realtime data in gv$sqlstats.
- the --begin-time and --end-time arguments are ignored
+ Analyze the realtime data in gv$sqlstats.
 
+ The data is compared to reference data, either from the file specified by --reference-file, or 
+ from AWR as defined by the --begin-time and --end-time arguments.
+
+=item --save-reference-file
+
+ When --save-reference-file <filename> is used, the AWR data as specified by --begin-time and --end-time arguments
+ is saved to the specified filename.
 
 =item --min-stddev
 
-minimum value of normalized stddev exe times to look for - defaults to 0.001
-
-=item --max-exe-time
-
-minimum value of max execution time to look for  - defaults to 0.001
+ minimum value of stddev exe times to look for - defaults to 0.001
 
 =item --send-alerts
 
@@ -671,7 +720,6 @@ send alert emails - default is to not send alerts
 
 save alert history - default is to not save alert history
 when used with --send-alerts and --alert-freq it is used to control when alerts are sent
-
 
 =item --alert-freq
 
@@ -729,7 +777,6 @@ when used with --send-alerts and --alert-freq it is used to control when alerts 
    #$timeScope='realtime';
    #$realtime=1;
    #$defMinStddev=0.010;
-   #$defMinimumMaxEtime=0.5;
 
 =head1 Sending Mail
 
