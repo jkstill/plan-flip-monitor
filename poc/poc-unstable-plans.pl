@@ -50,8 +50,6 @@ my $referenceFile='';
 my $saveReferenceFile='';
 my $csvOutput=0;
 my $csvDelimiter=',';
-my $timeScope='historic';
-my $realtime=0;
 my $defMinStddev=0.001;
 my $sendAlerts=0;
 my $saveAlerts=0;
@@ -96,7 +94,6 @@ my $ret = GetOptionsFromArray(\@ARGV,
 	"dumpsql!", => \$dumpSqlOnly,
 	"dbtype=s", => \$dbType,
 	"sysdba!",
-	"realtime!" => \$realtime,
 	"local-sysdba!",
 	"sysoper!",
 	"debug!" => \$DEBUG,
@@ -161,7 +158,6 @@ Getopt::Long::GetOptions(
 	"dumpsql!", => \$dumpSqlOnly,
 	"dbtype=s", => \$dbType,
 	"sysdba!",
-	"realtime!" => \$realtime,
 	"local-sysdba!",
 	"sysoper!",
 	"debug!" => \$DEBUG,
@@ -175,7 +171,6 @@ $localSysdba=$optctl{'local-sysdba'};
 
 if ( $help ){ usage(0); }
 
-# if realtime we do not care about start and stop times
 if ( $snapStartTime or $snapEndTime ) { # read history data from file
 	if ( ! isDateValid($snapStartTime)) {
 		warn "invalid date: $snapStartTime\n";
@@ -188,8 +183,9 @@ if ( $snapStartTime or $snapEndTime ) { # read history data from file
 }
 
 my $refFileFH;
-if ($saveReferenceFile) {
-	$refFileFH = IO::File->new($saveReferenceFile,'w') or die "could not open $saveReferenceFile for writing - $!\n";
+my $getHistoryFromFile=0;
+if ($referenceFile) {
+	$getHistoryFromFile=1;
 }
 
 if (! $localSysdba) {
@@ -304,10 +300,6 @@ if ( ! $csvOutput ) {
 }
 my $dbVersion="${majorOraVersion}.${minorOraVersion}" * 1; # convert to number
 
-#print qq(testsql: $sql\n);
-my $historicSTH=$dbh->prepare($historicSQL);
-my $realtimeSTH=$dbh->prepare($realtimeSQL);
-
 if ( ! $csvOutput ) {
 
 	print qq{
@@ -323,9 +315,6 @@ if ( ! $csvOutput ) {
 	};
 }
 
-$realtimeSTH->execute;
-$historicSTH->execute($defMinStddev,$snapStartTime, $snapEndTime, $timestampFormat);
-
 my $decimalPlaces=6;
 my $decimalFactor=10**$decimalPlaces;
 
@@ -336,95 +325,122 @@ my $currentTime=getEpoch();
 my $resultsReport='';  # if sending alerts, capture the report from write to STDOUT[_TOP|
 print "Epoch: $currentTime\n" unless $csvOutput;
 
-my ($realtimeData,$historicData);
+my ($realtimeData,$historicData)=((),());
 
-print join(qq/ /, @{ $realtimeSTH->{NAME_lc} }) . "\n";
-while ( my @ary = $realtimeSTH->fetchrow_array ) {
-	print join(' - ',@ary) . "\n";
-	# key is sql_id + phv
-	foreach my $i ( (4,6,7) ) { $ary[$i] = sprintf("%9.${decimalPlaces}f", $ary[$i]); }
-	$realtimeData->{$ary[0] . $ary[1]} = \@ary;
+#print join(qq/ /, @{ $realtimeSTH->{NAME_lc} }) . "\n";
+$realtimeData = getRealtimeData($dbh,$realtimeSQL);
+#$data->{$ary->[0] . $ary->[1]} = [@{$ary}];
+
+if ($getHistoryFromFile) {
+	$historicData = getHistoryFromFile($referenceFile);
+} else {
+	$historicData = getHistoricData($dbh,$historicSQL,$defMinStddev,$snapStartTime, $snapEndTime, $timestampFormat);
 }
-print "\n";
 
-print join(qq/ /, @{ $historicSTH->{NAME_lc} }) . "\n";
-while ( my @ary = $historicSTH->fetchrow_array ) {
-	print join(' - ',@ary) . "\n";
-	foreach my $i ( (4,6,7) ) { $ary[$i] = sprintf("%9.${decimalPlaces}f", $ary[$i]); }
-	$historicData->{$ary[0] . $ary[1]} = \@ary;
+if ($saveReferenceFile) {
+	saveReferenceFile($saveReferenceFile,$historicData);
 }
-print "\n";
 
-my  @names = map { scalar $dbh->type_info($_)->{TYPE_NAME} } @{ $historicSTH->{TYPE} };
+# both realtime and historic data have the same column names
+my @colNames = getColNames($dbh,$realtimeSQL);
 
-print Dumper($realtimeData);
-print Dumper($historicData);
-print Dumper(\@names);
+#my  @realtimeTypes = map { scalar $dbh->type_info($_)->{TYPE_NAME} } @{ $realtimeSTH->{TYPE} };
+#my  @realtimeNames = @{ $realtimeSTH->{NAME_lc} };
 
+print "\nrealtime: " . Dumper($realtimeData);
+print "\nhistoric: " . Dumper($historicData);
+print "\n" . '@colNames: ' . Dumper(\@colNames);
+#print Dumper(\@historicTypes);
+#print Dumper(\@realtimeNames);
+#print Dumper(\@realtimeTypes);
+
+my %colNames =  map{ $colNames[$_] => $_ } 0..$#colNames;
+print "\n" . '%colNames' . Dumper(\%colNames);
 
 # now compare the real time data to the historic data
 # START HERE!
 
-=head1
+#=head1
 
 # capture the output from write
+my @rptData;
 my ($stdoutDATA, $stderrDATA, @result) = capture {
 
-	while ( $ary = $sth->fetchrow_arrayref ) {
+	#while ( $ary = $sth->fetchrow_arrayref ) {
+	foreach my $sqlKey  ( keys %{$realtimeData} ) {
 		#print join(' - ',@{$ary}) . "\n";
-		my $sqlid = $ary->[0];
-		my $planHashValue = $ary->[1];
+		my @currData = @{$realtimeData->{$sqlKey}};
+		my $sqlID = $currData[$colNames{'sql_id'}];
+		my $planHashValue = $currData[$colNames{'plan_hash_value'}];
+
+		# skip if not in the reference data
+		next unless exists $historicData->{$sqlKey};
+
+		# next unless exe time > historic avg + 1 stddev
+		
+		next unless  
+			$realtimeData->{$sqlKey}->[$colNames{'avg_etime'}] 
+			> $historicData->{$sqlKey}->[$colNames{'avg_etime'}] 
+			+ $historicData->{$sqlKey}->[$colNames{'stddev_etime'}];
+			
+		@rptData = @currData;
+		print 'rptData: ' . Dumper(\@rptData);
+		pop @rptData;
+		print 'rptData: ' . Dumper(\@rptData);
+
+		push(@rptData,$historicData->{$sqlKey}->[$colNames{'avg_etime'}]);
+		push(@rptData,$historicData->{$sqlKey}->[$colNames{'stddev_etime'}]);
+		print 'rptData: ' . Dumper(\@rptData);
 
 		if ($csvOutput) {
 			# should not be any undef or null values in this array
 			if ( ! $csvHdrPrinted ) {
 				$csvHdrPrinted=1;
-				print join(qq/$csvDelimiter/, @{ $sth->{NAME_lc} }) . "\n";
+				print join(qq/$csvDelimiter/, @colNames) . "\n";
 			}
 			# it would be nice if there were some global setting to limit decimal places in perl.
 			# then just print the array
 			# limit to 6 decimal places
-			my @data=@{$ary};
-			foreach my $el ( 0 .. $#data ) {
+			foreach my $el ( 0 .. $#currData ) {
 				# is it a number?
-				my $value = $data[$el];
+				my $value = $currData[$el];
 				if ( $value =~ /^[[:digit:]\.]+$/ ) { # numeric - assuming at most 1 decimal point
 					$value = int($value * $decimalFactor) / $decimalFactor;
 					my $tmpVal = sprintf("%9.${decimalPlaces}f", $value); $tmpVal =~ s/\s+//g;
-					$data[$el] = $tmpVal;
+					$currData[$el] = $tmpVal;
 				}
 			}
 
-			print join(qq/$csvDelimiter/,@data) . "\n";
+			print join(qq/$csvDelimiter/,@currData) . "\n";
 		} else {
 			write;
 		}
 
-		#warn "SQLID: $sqlid\n";
-		if ( exists $alerts{$sqlid}->{$planHashValue} ) {
+		#warn "SQLID: $sqlID\n";
+		if ( exists $alerts{$sqlID}->{$planHashValue} ) {
 			# determine if the last time reported should be updated
 
-			my $deltaTime = ( $currentTime + 0 ) - ( $alerts{$sqlid}->{$planHashValue} + 0);
+			my $deltaTime = ( $currentTime + 0 ) - ( $alerts{$sqlID}->{$planHashValue} + 0);
 			debugWarn( "   current time: " . $currentTime . "\n");
-			debugWarn( "  previous time: " . $alerts{$sqlid}->{$planHashValue} . "\n");
+			debugWarn( "  previous time: " . $alerts{$sqlID}->{$planHashValue} . "\n");
 			debugWarn( "     delta time: " . $deltaTime . "\n");
 			debugWarn( "     alert freq: " . $alertFrequency  . "\n");
 			debugWarn( "==============================\n");
 
-			if ( $currentTime - $alerts{$sqlid}->{$planHashValue} > $alertFrequency ) {
-				$alerts{$sqlid}->{$planHashValue} = $currentTime;
-				$sqlidsToReport{$sqlid}->{$planHashValue} = $currentTime;
+			if ( $currentTime - $alerts{$sqlID}->{$planHashValue} > $alertFrequency ) {
+				$alerts{$sqlID}->{$planHashValue} = $currentTime;
+				$sqlidsToReport{$sqlID}->{$planHashValue} = $currentTime;
 			}
 		} else {
-			$alerts{$sqlid}->{$planHashValue} = $currentTime;
-			$sqlidsToReport{$sqlid}->{$planHashValue} = $currentTime;
+			$alerts{$sqlID}->{$planHashValue} = $currentTime;
+			$sqlidsToReport{$sqlID}->{$planHashValue} = $currentTime;
 		}
 	}
 };
 
 
-print '@result: ' . Dumper(\@result) . "\n" if defined($result[0]);;
-#print '%sqlidsToReport: ' . Dumper(\%sqlidsToReport) . "\n";
+#print '@result: ' . Dumper(\@result) . "\n" if defined($result[0]);;
+print '%sqlidsToReport: ' . Dumper(\%sqlidsToReport) . "\n";
 # update the list of plan-flips found
 
 saveAlertTimes($alertLogCSV,\%alerts) if $saveAlerts;
@@ -445,7 +461,7 @@ if ($sendAlerts && %sqlidsToReport ) {
 	sendAlert(\%emailConfig);
 }
 
-=cut
+#=cut
 
 $dbh->disconnect;
 
@@ -453,14 +469,14 @@ exit;
 
 #c13sma6rkr27c 234234234234   31,692,872 SOE                        0.0       4        0.0064137        0.0113004       0.0020        0.3187
 format STDOUT_TOP = 
-                                                                          PLAN
-SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT        MIN_ETIME        MAX_ETIME     STDDEV_ETIME
+                                                                          PLAN CURRENT AVERAGE  HISTORIC AVERAGE STDDEV
+SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT EXECTION TIME    EXECUTION TIME   EXECUTION TIME
 ------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ----------------
 .
 
 format STDOUT =
 @<<<<<<<<<<<< @########### @########### @<<<<<<<<<<<<< @##########.###  @##### @#######.####### @#######.####### @#######.#######
-@{$ary}
+@rptData
 .
 
 
@@ -690,18 +706,9 @@ format STDOUT =
 
 =item --reference-file
 
- When the --realtime option is used, the current sql execution times are compared to a reference.
-
  If the --reference-file <filename> option is used, then the reference data comes from this file.
 
  When --reference-file is used, the --begin-time and --end-time arguments are ignored.
-
-=item --realtime
-
- Analyze the realtime data in gv$sqlstats.
-
- The data is compared to reference data, either from the file specified by --reference-file, or 
- from AWR as defined by the --begin-time and --end-time arguments.
 
 =item --save-reference-file
 
@@ -774,8 +781,6 @@ when used with --send-alerts and --alert-freq it is used to control when alerts 
 
    #$csvOutput=1;
    #$csvDelimiter='|';
-   #$timeScope='realtime';
-   #$realtime=1;
    #$defMinStddev=0.010;
 
 =head1 Sending Mail
@@ -793,7 +798,6 @@ when used with --send-alerts and --alert-freq it is used to control when alerts 
  * find a period that represents decent performance with the --begin-time and --end-time options
  * use the --save-alerts option
  * use cron or a scheduler to run with these options
-  --realtime
   --save-alerts
   --send-alerts
 
@@ -948,4 +952,71 @@ sub debugPrint {
 	print "$_[0]" if $DEBUG;
 }
 
+sub getRealtimeData {
+
+	my ($dbh,$sql) = @_;
+	my $data;
+
+	my $sth = $dbh->prepare($sql);
+	$sth->execute;
+
+	while ( my $ary = $sth->fetchrow_arrayref ) {
+		print 'realtime: ' . join(' - ',@{$ary}) . "\n";
+		foreach my $i ( (4,6,7) ) { $ary->[$i] = sprintf("%9.${decimalPlaces}f", $ary->[$i]); }
+		$data->{$ary->[0] . $ary->[1]} = [@{$ary}];
+	}
+
+	return $data;
+}
+
+sub getColNames {
+	my ($dbh,$sql) = @_;
+	my $data;
+
+	my $sth = $dbh->prepare($sql);
+	my @colNames = @{$sth->{NAME_lc}};
+	$sth->finish;
+	return @colNames;
+}
+
+sub getHistoricData{
+	my ($dbh,$sql,$minStddev,$startTime,$endTime,$timestampFormat) = @_;
+	my $data;
+
+	my $sth = $dbh->prepare($sql);
+	$sth->execute($defMinStddev,$snapStartTime, $snapEndTime, $timestampFormat);
+
+	#print join(qq/ /, @{ $historicSTH->{NAME_lc} }) . "\n";
+	while ( my $ary = $sth->fetchrow_arrayref ) {
+		print join(' - ',@{$ary}) . "\n";
+		foreach my $i ( (4,6,7) ) { $ary->[$i] = sprintf("%9.${decimalPlaces}f", $ary->[$i]); }
+		$data->{$ary->[0] . $ary->[1]} = [@{$ary}];
+	}
+
+	return $data;
+}
+
+sub saveReferenceFile{
+	my ($file,$data) = @_;
+	my $refFileFH = IO::File->new($file,'w') or die "could not open $file for writing - $!\n";
+	foreach my $sqlKey ( keys %{$data} ) {
+		$refFileFH->print($sqlKey . ',' . join(',',@{$data->{$sqlKey}}) . "\n");
+	}
+}
+
+sub getHistoryFromFile{
+	my ($file) = @_;
+	my $historyData;
+
+	$refFileFH = IO::File->new($file,'r') or die "could not open $file for reading - $!\n";
+	while(<$refFileFH>) {
+		chomp;
+		my @data=split(',');
+		my $sqlKey=$data[0];
+		shift @data; # remove element 0
+		$historyData->{$sqlKey} = [@data];
+	}
+
+	return $historyData;
+}
 
