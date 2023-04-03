@@ -33,9 +33,9 @@ our %sql = ();
 
  unstable-plans-baseline-historicrealtime-[CONTAINER|LEGACY]
   
-	:2 begin_time
-	:3 end_time
-	:4 date_format
+	:1 begin_time
+	:2 end_time
+	:3 date_format
 
 =cut
 
@@ -48,14 +48,14 @@ min_snap_id as
 	select
 		min(snap_id) snap_id
 	from dba_hist_snapshot
-	where begin_interval_time >=  to_timestamp(:2,:4) <<CONTAINER-CLAUSE>>
+	where begin_interval_time >=  to_timestamp(:1,:3) <<CONTAINER-CLAUSE>>
 ),
 max_snap_id as
 (
 	select
 		max(snap_id) snap_id
 	from dba_hist_snapshot
-	where end_interval_time <= to_timestamp(:3,:4) <<CONTAINER-CLAUSE>>
+	where end_interval_time <= to_timestamp(:2,:3) <<CONTAINER-CLAUSE>>
 ),
 rawdata as
 (
@@ -143,7 +143,6 @@ getuser as (
 		, r.stddev_etime
 		--, r.norm_stddev
 	from report_data r
-	where r.stddev_etime > :1
 )
 select *
 from getuser
