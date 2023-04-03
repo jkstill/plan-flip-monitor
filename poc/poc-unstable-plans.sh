@@ -141,9 +141,9 @@ EOF
 )
 set -u
 
-declare logFile="$logDir/poc-unstable-plans-${DBNAME}-"$(date +%Y-%m-%d_%H-%M-%S)'.log'
+logDbName=$(echo "${DBNAME}" | sed -e 's/\//-/g')
+declare logFile="$logDir/poc-unstable-plans-${logDbName}-"$(date +%Y-%m-%d_%H-%M-%S)'.log'
 touch $logFile || { echo "could not create '$logFile'"; exit 1; }
-
 
 connectString=''
 
