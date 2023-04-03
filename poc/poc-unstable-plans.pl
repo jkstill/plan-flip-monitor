@@ -46,21 +46,21 @@ my $timestampFormat = 'yyyy-mm-dd hh24:mi:ss';
 #my $snapEndTime = '2022-05-31 00:00:00';
 my $snapStartTime='';
 my $snapEndTime='';
+my $referenceFile='';
+my $saveReferenceFile='';
 my $csvOutput=0;
 my $csvDelimiter=',';
-my $timeScope='historic';
-my $realtime=0;
-my $defMinNormStddev=0.001;
-my $defMinimumMaxEtime=0.001;
+my $defMinStddev=0.001;
 my $sendAlerts=0;
 my $saveAlerts=0;
-my $DEBUG=0;
 my $dumpSqlOnly=0;
 my $configFile='planflip.conf';
 my($db, $username, $password, $connectionMode, $localSysdba);
 # if alerted for a SQL_ID, do not alert again for this many seconds
 my $alertFrequency=86400;
 my %optctl = ();
+my $verbose=0;
+my $DEBUG=0;
 
 # this is set automatically in the program
 # the --dbtype option can be used to force the dbtype: CONTAINER or LEGACY
@@ -83,18 +83,19 @@ my $ret = GetOptionsFromArray(\@ARGV,
 	"username=s" => \$username,
 	"password=s" => \$password,
 	"begin-time=s" => \$snapStartTime,
-  	"min-stddev=f" => \$defMinNormStddev,
-  	"max-exe-time=f" => \$defMinimumMaxEtime,
+  	"min-stddev=f" => \$defMinStddev,
 	"end-time=s" => \$snapEndTime,
 	"csv!" => \$csvOutput,
 	"csv-delimiter=s" => \$csvDelimiter,
 	"send-alerts!" => \$sendAlerts,
 	"save-alerts!" => \$saveAlerts,
+	"verbose!" => \$verbose,
+	"reference-file=s" => \$referenceFile,
+	"save-reference-file=s" => \$saveReferenceFile,
 	"alert-freq=n" => \$alertFrequency,
 	"dumpsql!", => \$dumpSqlOnly,
 	"dbtype=s", => \$dbType,
 	"sysdba!",
-	"realtime!" => \$realtime,
 	"local-sysdba!",
 	"sysoper!",
 	"debug!" => \$DEBUG,
@@ -125,8 +126,8 @@ my %alerts=();
 
 getAlertTimes($alertLogCSV,\%alerts);
 
-debugWarn(Dumper(\%emailConfig));
-debugWarn("configFile: $configFile\n");
+DEBUGWarn(Dumper(\%emailConfig));
+DEBUGWarn("configFile: $configFile\n");
 #exit;
 
 # test the alert
@@ -147,18 +148,19 @@ Getopt::Long::GetOptions(
 	"username=s" => \$username,
 	"password=s" => \$password,
 	"begin-time=s" => \$snapStartTime,
-  	"min-stddev=f" => \$defMinNormStddev,
-  	"max-exe-time=f" => \$defMinimumMaxEtime,
+  	"min-stddev=f" => \$defMinStddev,
 	"end-time=s" => \$snapEndTime,
 	"csv!" => \$csvOutput,
 	"csv-delimiter=s" => \$csvDelimiter,
 	"send-alerts!" => \$sendAlerts,
 	"save-alerts!" => \$saveAlerts,
+	"verbose!" => \$verbose,
+	"reference-file=s" => \$referenceFile,
+	"save-reference-file=s" => \$saveReferenceFile,
 	"alert-freq=n" => \$alertFrequency,
 	"dumpsql!", => \$dumpSqlOnly,
 	"dbtype=s", => \$dbType,
 	"sysdba!",
-	"realtime!" => \$realtime,
 	"local-sysdba!",
 	"sysoper!",
 	"debug!" => \$DEBUG,
@@ -172,10 +174,7 @@ $localSysdba=$optctl{'local-sysdba'};
 
 if ( $help ){ usage(0); }
 
-# if realtime we do not care about start and stop times
-if ( $realtime ) {
-	$timeScope='realtime';
-} else {
+if ( $snapStartTime or $snapEndTime ) { # read history data from file
 	if ( ! isDateValid($snapStartTime)) {
 		warn "invalid date: $snapStartTime\n";
 		pod2usage( -verbose => 1 );
@@ -184,6 +183,12 @@ if ( $realtime ) {
 		warn "invalid date: $snapEndTime\n";
 		pod2usage( -verbose => 1 );
 	}
+}
+
+my $refFileFH;
+my $getHistoryFromFile=0;
+if ($referenceFile) {
+	$getHistoryFromFile=1;
 }
 
 if (! $localSysdba) {
@@ -260,134 +265,180 @@ if ( $dbType ) {
 }
 
 # get the SQL statement for checking unstable plans
-my $sql='';
-my $sqlName="unstable-plans-baseline-${timeScope}";
+my $historicSQL='';
+my $realtimeSQL='';
+my $historicSqlName="unstable-plans-baseline-historic";
+my $realtimeSqlName="unstable-plans-baseline-realtime";
 
 
 eval {
-	$sql = SQL::getSql($sqlName,$dbType);
-	die unless $sql;
+	$historicSQL = SQL::getSql($historicSqlName,$dbType);
+	die unless $historicSQL;
+	$realtimeSQL = SQL::getSql($realtimeSqlName,$dbType);
+	die unless $realtimeSQL;
 };
 
 if ($@) {
-	die "failed to get SQL '$sqlName'\n";
+	die "failed to get SQL\n";
 }
 
 # print sql and exit if requested
 if ($dumpSqlOnly) {
 
-	$sql =~ s/:5/'$timestampFormat'/g;
-	$sql =~ s/:3/'$snapStartTime'/g;
-	$sql =~ s/:4/'$snapEndTime'/g;
-	$sql =~ s/:1/$defMinNormStddev/g;
-	$sql =~ s/:2/$defMinimumMaxEtime/g;
+	$historicSQL =~ s/:4/'$timestampFormat'/g;
+	$historicSQL =~ s/:2/'$snapStartTime'/g;
+	$historicSQL =~ s/:3/'$snapEndTime'/g;
+	$historicSQL =~ s/:1/$defMinStddev/g;
 
-	print "$sql\n";
+	print "$historicSQL;\n";
+	print "\n";
+	print "$realtimeSQL;\n";
 
 	$dbh->disconnect;
 	exit 0;
 }
 
-if ( ! $csvOutput ) {
+if ( ! $csvOutput && $verbose ) {
 	print "Major/Minor version $majorOraVersion/$minorOraVersion\n";
 }
 my $dbVersion="${majorOraVersion}.${minorOraVersion}" * 1; # convert to number
 
-#print qq(testsql: $sql\n);
-my $sth=$dbh->prepare($sql);
-
 if ( ! $csvOutput ) {
-
-	print qq{
-
- running query for $sqlName-$dbType
-};
-	if ( ! $realtime ) {
+	if ( $snapStartTime or $snapEndTime ) { # read history data from file
 		print qq{
   format: $timestampFormat
    start: $snapStartTime
      end: $snapEndTime
 };
-};
-}
-
-if ($realtime) {
-	$sth->execute($defMinNormStddev,$defMinimumMaxEtime);
-} else {
-	$sth->execute($defMinNormStddev,$defMinimumMaxEtime,$snapStartTime, $snapEndTime, $timestampFormat);
+	};
 }
 
 my $decimalPlaces=6;
-my $decimalFactor=10**$decimalPlaces;
-
 my $ary;
 my $csvHdrPrinted=0;
 my %sqlidsToReport=();
 my $currentTime=getEpoch();
 my $resultsReport='';  # if sending alerts, capture the report from write to STDOUT[_TOP|
+my ($realtimeData,$historicData)=((),());
+
 print "Epoch: $currentTime\n" unless $csvOutput;
 
-# capture the output from write
+#print join(qq/ /, @{ $realtimeSTH->{NAME_lc} }) . "\n";
+$realtimeData = getRealtimeData($dbh,$realtimeSQL);
+#$data->{$ary->[0] . $ary->[1]} = [@{$ary}];
 
+if ($getHistoryFromFile) {
+	$historicData = getHistoryFromFile($referenceFile);
+} else {
+	$historicData = getHistoricData($dbh,$historicSQL,$snapStartTime, $snapEndTime, $timestampFormat);
+}
+
+if ($saveReferenceFile) {
+	saveReferenceFile($saveReferenceFile,$historicData);
+}
+
+# both realtime and historic data have the same column names
+my @colNames = getColNames($dbh,$realtimeSQL);
+my %colNames =  map{ $colNames[$_] => $_ } 0..$#colNames;
+print "\n" . '%colNames' . Dumper(\%colNames) if $DEBUG;
+
+#my  @realtimeTypes = map { scalar $dbh->type_info($_)->{TYPE_NAME} } @{ $realtimeSTH->{TYPE} };
+#my  @realtimeNames = @{ $realtimeSTH->{NAME_lc} };
+
+if ($DEBUG) {
+	print "\nrealtime: " . Dumper($realtimeData);
+	print "\nhistoric: " . Dumper($historicData);
+	print "\n" . '@colNames: ' . Dumper(\@colNames);
+	#print Dumper(\@historicTypes);
+	#print Dumper(\@realtimeNames);
+	#print Dumper(\@realtimeTypes);
+}
+
+# now compare the real time data to the historic data
+#=head1
+
+# capture the output from write
+my @rptData;
 my ($stdoutDATA, $stderrDATA, @result) = capture {
 
-	while ( $ary = $sth->fetchrow_arrayref ) {
+	#while ( $ary = $sth->fetchrow_arrayref ) {
+	foreach my $sqlKey  ( keys %{$realtimeData} ) {
 		#print join(' - ',@{$ary}) . "\n";
-		my $sqlid = $ary->[0];
-		my $planHashValue = $ary->[1];
+		my @currData = @{$realtimeData->{$sqlKey}};
+		my $sqlID = $currData[$colNames{'sql_id'}];
+		my $planHashValue = $currData[$colNames{'plan_hash_value'}];
+
+		# skip if not in the reference data
+		next unless exists $historicData->{$sqlKey};
+
+		# next unless exe time > historic avg + 1 stddev
+		
+		next unless  
+			$realtimeData->{$sqlKey}->[$colNames{'avg_etime'}] 
+			> $historicData->{$sqlKey}->[$colNames{'avg_etime'}] 
+			+ ($historicData->{$sqlKey}->[$colNames{'stddev_etime'}] * $defMinStddev);
+			
+		@rptData = @currData;
+		print 'rptData: ' . Dumper(\@rptData) if $DEBUG;
+		pop @rptData;
+		print 'rptData: ' . Dumper(\@rptData) if $DEBUG;
+
+		push(@rptData,$historicData->{$sqlKey}->[$colNames{'avg_etime'}]);
+		push(@rptData,$historicData->{$sqlKey}->[$colNames{'stddev_etime'}]);
+		print 'rptData: ' . Dumper(\@rptData) if $DEBUG;
 
 		if ($csvOutput) {
 			# should not be any undef or null values in this array
 			if ( ! $csvHdrPrinted ) {
 				$csvHdrPrinted=1;
-				print join(qq/$csvDelimiter/, @{ $sth->{NAME_lc} }) . "\n";
+				print join(qq/$csvDelimiter/, @colNames) . "\n";
 			}
 			# it would be nice if there were some global setting to limit decimal places in perl.
 			# then just print the array
 			# limit to 6 decimal places
-			my @data=@{$ary};
-			foreach my $el ( 0 .. $#data ) {
+			foreach my $el ( 0 .. $#currData ) {
 				# is it a number?
-				my $value = $data[$el];
-				if ( $value =~ /^[[:digit:]\.]+$/ ) { # numeric - assuming at most 1 decimal point
-					$value = int($value * $decimalFactor) / $decimalFactor;
+				my $value = $currData[$el];
+				if ( $value =~ /^[[:digit:]]+\.{1}[[:digit:]]+$/ ) { # numeric - assuming at most 1 decimal point
 					my $tmpVal = sprintf("%9.${decimalPlaces}f", $value); $tmpVal =~ s/\s+//g;
-					$data[$el] = $tmpVal;
+					$currData[$el] = $tmpVal;
 				}
 			}
 
-			print join(qq/$csvDelimiter/,@data) . "\n";
+			print join(qq/$csvDelimiter/,@currData) . "\n";
 		} else {
 			write;
 		}
 
-		#warn "SQLID: $sqlid\n";
-		if ( exists $alerts{$sqlid}->{$planHashValue} ) {
+		#warn "SQLID: $sqlID\n";
+		if ( exists $alerts{$sqlID}->{$planHashValue} ) {
 			# determine if the last time reported should be updated
 
-			my $deltaTime = ( $currentTime + 0 ) - ( $alerts{$sqlid}->{$planHashValue} + 0);
-			debugWarn( "   current time: " . $currentTime . "\n");
-			debugWarn( "  previous time: " . $alerts{$sqlid}->{$planHashValue} . "\n");
-			debugWarn( "     delta time: " . $deltaTime . "\n");
-			debugWarn( "     alert freq: " . $alertFrequency  . "\n");
-			debugWarn( "==============================\n");
+			my $deltaTime = ( $currentTime + 0 ) - ( $alerts{$sqlID}->{$planHashValue} + 0);
+			DEBUGWarn( "   current time: " . $currentTime . "\n");
+			DEBUGWarn( "  previous time: " . $alerts{$sqlID}->{$planHashValue} . "\n");
+			DEBUGWarn( "     delta time: " . $deltaTime . "\n");
+			DEBUGWarn( "     alert freq: " . $alertFrequency  . "\n");
+			DEBUGWarn( "==============================\n");
 
-			if ( $currentTime - $alerts{$sqlid}->{$planHashValue} > $alertFrequency ) {
-				$alerts{$sqlid}->{$planHashValue} = $currentTime;
-				$sqlidsToReport{$sqlid}->{$planHashValue} = $currentTime;
+			if ( $currentTime - $alerts{$sqlID}->{$planHashValue} > $alertFrequency ) {
+				$alerts{$sqlID}->{$planHashValue} = $currentTime;
+				$sqlidsToReport{$sqlID}->{$planHashValue} = $currentTime;
 			}
 		} else {
-			$alerts{$sqlid}->{$planHashValue} = $currentTime;
-			$sqlidsToReport{$sqlid}->{$planHashValue} = $currentTime;
+			$alerts{$sqlID}->{$planHashValue} = $currentTime;
+			$sqlidsToReport{$sqlID}->{$planHashValue} = $currentTime;
 		}
 	}
 };
 
-print '@result: ' . Dumper(\@result) . "\n" if defined($result[0]);;
-#print '%sqlidsToReport: ' . Dumper(\%sqlidsToReport) . "\n";
+
+#print '@result: ' . Dumper(\@result) . "\n" if defined($result[0]);;
+print '%sqlidsToReport: ' . Dumper(\%sqlidsToReport) . "\n" if $DEBUG;
 # update the list of plan-flips found
 
 saveAlertTimes($alertLogCSV,\%alerts) if $saveAlerts;
+
 
 # this is the report or csv
 print "$stdoutDATA";
@@ -404,20 +455,22 @@ if ($sendAlerts && %sqlidsToReport ) {
 	sendAlert(\%emailConfig);
 }
 
+#=cut
+
 $dbh->disconnect;
 
 exit;
 
 #c13sma6rkr27c 234234234234   31,692,872 SOE                        0.0       4        0.0064137        0.0113004       0.0020        0.3187
 format STDOUT_TOP = 
-                                                                          PLAN
-SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT        MIN_ETIME        MAX_ETIME     STDDEV_ETIME      NORM_STDDEV
-------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ---------------- ----------------
+                                                                          PLAN CURRENT AVERAGE  HISTORIC AVERAGE STDDEV
+SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT EXECTION TIME    EXECUTION TIME   EXECUTION TIME
+------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ----------------
 .
 
 format STDOUT =
-@<<<<<<<<<<<< @########### @########### @<<<<<<<<<<<<< @##########.###  @##### @#######.####### @#######.####### @#######.####### @#######.#######
-@{$ary}
+@<<<<<<<<<<<< @########### @########### @<<<<<<<<<<<<< @##########.###  @##### @#######.####### @#######.####### @#######.#######
+@rptData
 .
 
 
@@ -427,26 +480,19 @@ format STDOUT =
 
 =head1 SYNOPSIS
 
- Catch plan flips that have caused a performance degradation
+ Catch SQL that have suffered performance degradation.
 
- This script checks calculated the stddev for SQL execution times.
+ This may or may not happen due to a poor plan chosen by the optimizer, but it is something that does happen.
 
- Detect USER SQL where executions are outside the stddev of execution times
- Currently the values to detect these are hardcoded to a low value.
+ This script get the calculated stddev for SQL execution times from historic AWR data.
 
- By default DBA_HIST views are used to look at historical data. 
- 'Historical' can be as recent as the most recent snapshot-1, snapshot.
-
- The --realtime option will instead look at realtime data in gv\$sqlstats
-
- The script will report on SQL statements where these criteria are met:
+ When current USER SQL execution times are outside the historical average execution time + (N * stddev), the SQL is flagged.
 
    --min-stddev   normalized stddev of execution time is N.N of stddev - default is 0.001
-   --max-exe-time the maximum execution time is N.N seconds or more - default is 0.001
 
  The defaults will likely catch a few SQL statements.  
 
- Using the defaults gets a report that may be used to tune the values for --min-stddev and --min-exe-time
+ Using the defaults gets a report that may be used to tune the values for --min-stddeveand --min-exe-time
 
  When the stddev of some executions exceeds a threshold, AND the longest execution time passes a threshold,
  the SQL and Plan Hash value are reported.
@@ -455,74 +501,116 @@ format STDOUT =
 
  examples:
 
- This command will look through AWR and find user SQL that exceeds the thresholds
+ This command will look through AWR, using the AWR data framed by the --begin-time and --end-time date, and search realtime data (gv$sqlstats) for user SQL that exceeds the thresholds.
 
- $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --database //rac-scan/swingbench --username somedba --password XXX --begin-time '2022-05-10 00:00:00' --end-time '2022-05-12 23:00:00'  --min-stddev  20
- Major/Minor version 19/0
-
- running query for unstable-plans-baseline-historic-CONTAINER
+ ./poc-unstable-plans.pl  --sysdba --username sys --password XXXX --database myserver/orcl.jks.com --begin-time '2023-03-31 00:00:00' --end-time '2023-04-02 23:00:00'  --min-stddev 0.005
 
   format: yyyy-mm-dd hh24:mi:ss
    start: 2022-05-10 00:00:00
      end: 2022-05-12 23:00:00
  Epoch: 1652827438
-                                                                          PLAN
- SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT        MIN_ETIME        MAX_ETIME     STDDEV_ETIME      NORM_STDDEV
- ------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ---------------- ----------------
- 56pwkjspvmg3h   1448083145        59561 SOE                    138.569       2        4.7552763        4.7552763      122.1845768       25.6945275
- gkxxkghxubh1a   2220165490        59234 SOE                    139.322       2        4.7165040        4.7165040      199.9986083       42.4039942
- 7hk2m2702ua0g   2307454521           11 SOE                    160.964       6        1.1280896        1.1280896       58.5730151       51.9223059
- 29qp10usqkqh0   1055577880       119025 SOE                      3.526       3        0.1557687        0.1557687      168.6800624     1082.8879105
- 8zz6y2yzdqjp0    574689976       595704 SOE                      0.004       2        0.0169154        0.0169154       31.9432872     1888.4093678
- 7hk2m2702ua0g   2048963432       294374 SOE                      0.010       6        0.0280221        0.0280221       58.5730151     2090.2412237
- 7ws837zynp1zv   3722429161      2382907 SOE                      0.000       2        0.0050973        0.0050973       20.4907658     4019.9639761
- 7t0959msvyt5g    856749079       894670 SOE                      0.003       2        0.0122687        0.0122687       75.2371300     6132.4693216
- 1qf3b7a46jm3u   1322380957       894727 SOE                      0.001       2        0.0094323        0.0094323       78.7726617     8351.3943886
- g81cbrq5yamf5   2480532011      3278664 SOE                      0.000       2        0.0062281        0.0062281       55.1291887     8851.6471375
-
-
- The previous command used the '--min-stddev 20' argument to limit the SQL found.
-
- The '-max-exe-time 3' option is now used to show only those SQL statements that at some time in this period had an elapsed time exceeding 3 seconds.
-
- $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --database //rac-scan/swingbench --username somedba --password XXX --begin-time '2022-05-10 00:00:00' --end-time '2022-05-12 23:00:00'  --min-stddev  20 --max-exe-time 3
- Major/Minor version 19/0
-
-  running query for unstable-plans-baseline-historic-CONTAINER
-
-   format: yyyy-mm-dd hh24:mi:ss
-    start: 2022-05-10 00:00:00
-      end: 2022-05-12 23:00:00
- Epoch: 1652830981
-                                                                           PLAN
- SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT        MIN_ETIME        MAX_ETIME     STDDEV_ETIME      NORM_STDDEV
- ------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ---------------- ----------------
- 56pwkjspvmg3h   1448083145        59561 SOE                    138.569       2        4.7552763        4.7552763      122.1845768       25.6945275
- gkxxkghxubh1a   2220165490        59234 SOE                    139.322       2        4.7165040        4.7165040      199.9986083       42.4039942
+                                                                          PLAN CURRENT AVERAGE  HISTORIC AVERAGE STDDEV
+ SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT EXECTION TIME    EXECUTION TIME   EXECUTION TIME
+ ------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ----------------
+ g4rkmp4240p84            0         1845 SOE                      0.000       1        0.0002950        0.0002250        0.0034240
+ 1astj4jqd7601   2611064198            1 SOE                  49921.000       1        3.3440280        2.4525210        0.0000000
+ apgb2g9q2zjh1            0      1944148 SOE                      0.000       1        0.0157670        0.0008020        1.2701010
+ ada7aaxu4cp7h    296924608            2 SOE                  27268.500       1        5.2845090        5.0691290        0.0000000
+ a9gvfh5hx9u98            0       648239 SOE                      0.000       1        0.0133460        0.0005650        0.5777520
+ cj9v3ynkm7uuy            0       259556 SOE                      0.012       1        0.0118900        0.0026010        0.2288180
  
 
- Should you find a period that represents good perfomance, you may use the --save-alerts option.
+ Should you find a period in AWR that represents an good average performance baseline for comparisons, you can save that to a file with the --save-reference-file option.
+ 
+ $  ./poc-unstable-plans.pl  --save-reference-file soe-awr-ref-2023-04-02.ref --sysdba --username sys --password XXXX --database myserver/orcl.jks.com --begin-time '2023-03-31 00:00:00' --end-time '2023-04-02 23:00:00'  --min-stddev  0
 
- Doing so will save the sql_id, plan_hash_value, and the current time to poc-plan-flip.csv file.
+  format: yyyy-mm-dd hh24:mi:ss
+   start: 2023-03-31 00:00:00
+     end: 2023-04-02 23:00:00
+ Epoch: 1680486439
+                                                                           PLAN CURRENT AVERAGE  HISTORIC AVERAGE STDDEV
+ SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT EXECTION TIME    EXECUTION TIME   EXECUTION TIME
+ ------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ----------------
+ cmndgkbkcz5s9            0      1296644 SOE                      0.000       1        0.0049210        0.0004080        0.9516200
+ budtrjayjnvw3            0      1944089 SOE                      0.000       1        0.0000710        0.0000700        0.1441060
+ gzhkw1qu6fwxm   3241608609      3027663 SOE                      0.000       1        0.0001200        0.0001170        1.1563720
+ 7hk2m2702ua0g   2048963432       544363 SOE                      0.000       1        0.0001080        0.0001060        0.0049020
+ 9t3n2wpr7my63            0      2484419 SOE                      0.000       1        0.0001080        0.0001070        0.7641280
+ cj9v3ynkm7uuy            0       259744 SOE                      0.012       1        0.0118830        0.0026010        0.2288180
+ 7t0959msvyt5g    856749079      1632522 SOE                      0.000       1        0.0000590        0.0000580        0.1492840
+ 56pwkjspvmg3h   1448083145       108607 SOE                      0.042       1        0.0093140        0.0091390        2.9702510
+ 0w2qpuc6u2zsp            0      5192813 SOE                      0.000       1        0.0291680        0.0053310       36.4750380
+ 1astj4jqd7601   2611064198            1 SOE                  49921.000       1        3.3440280        2.4525210        0.0000000
+ g4rkmp4240p84            0         1845 SOE                      0.000       1        0.0002950        0.0002250        0.0034240
+ 5mddt5kt45rg3   1628223527      5192742 SOE                      0.000       1        0.0001090        0.0001080        0.5520810
+ 3fw75k1snsddx    494735477      5192731 SOE                      0.000       1        0.0002560        0.0002540        2.9303390
+ ada7aaxu4cp7h    296924608            2 SOE                  27268.500       1        5.2845090        5.0691290        0.0000000
+ 147a57cxq3w5y            0     11677113 SOE                      0.000       1        0.0107120        0.0019330        5.3685440
+ apgb2g9q2zjh1            0      1945439 SOE                      0.000       1        0.0157580        0.0008020        1.2701010
+ f7rxuxzt64k87            0     15563273 SOE                      0.000       1        0.0001030        0.0000970        1.4380900
+ b5dk0t95fhyd7            0       129351 SOE                      0.033       1        0.0114730        0.0086350        2.8399980
+ gh2g2tynpcpv1            0      1941887 SOE                      0.000       1        0.0002650        0.0002570        1.2060610
+ 1b3utaf6tfhfy   1197098199      1622536 SOE                      0.000       1        0.0001220        0.0001160        0.8607310
+ gkxxkghxubh1a   2220165490       108546 SOE                      0.042       1        0.0085560        0.0083740        2.8407620
+ a9gvfh5hx9u98            0       648686 SOE                      0.000       1        0.0133370        0.0005650        0.5777520
+ 01jzc2mg6cg92            0      1944044 SOE                      0.000       1        0.0008620        0.0008550        1.2628800
+ 29qp10usqkqh0   1055577880       217722 SOE                      0.007       1        0.0028740        0.0023480        0.2156850
+ 89b7r2pg1cn4a            0       129552 SOE                      0.033       1        0.0127590        0.0094580        2.9744270
 
- $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --database //rac-scan/swingbench --username somedba --password XXX --begin-time '2022-05-10 00:00:00' --end-time '2022-05-12 23:00:00'  --min-stddev  20 --max-exe-time 3
- Major/Minor version 19/0
 
-  running query for unstable-plans-baseline-historic-CONTAINER
+ The saved file can then be used as baseline data via the --reference-file option:
 
+ $  ./poc-unstable-plans.pl  --reference-file soe-awr-ref-2023-04-02.ref --sysdba --username sys --password XXXX --database myserver/orcl.jks.com --min-stddev 0.001
+ Epoch: 1680486719
+                                                                           PLAN CURRENT AVERAGE  HISTORIC AVERAGE STDDEV
+ SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT EXECTION TIME    EXECUTION TIME   EXECUTION TIME
+ ------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ----------------
+ 1astj4jqd7601   2611064198            1 SOE                  49921.000       1        3.3440280        2.4525210        0.0000000
+ apgb2g9q2zjh1            0      1947106 SOE                      0.000       1        0.0157460        0.0008020        1.2701010
+ cmndgkbkcz5s9            0      1297836 SOE                      0.000       1        0.0049170        0.0004080        0.9516200
+ g4rkmp4240p84            0         1845 SOE                      0.000       1        0.0002950        0.0002250        0.0034240
+ 89b7r2pg1cn4a            0       129661 SOE                      0.033       1        0.0127580        0.0094580        2.9744270
+ cj9v3ynkm7uuy            0       260002 SOE                      0.012       1        0.0118740        0.0026010        0.2288180
+ 147a57cxq3w5y            0     11687230 SOE                      0.000       1        0.0107040        0.0019330        5.3685440
+ ada7aaxu4cp7h    296924608            2 SOE                  27268.500       1        5.2845090        5.0691290        0.0000000
+ 29qp10usqkqh0   1055577880       217980 SOE                      0.007       1        0.0028740        0.0023480        0.2156850
+ a9gvfh5hx9u98            0       649227 SOE                      0.000       1        0.0133270        0.0005650        0.5777520
+
+
+ If you want to send alerts via email, and have configured `planflip.conf`, then the `--send-alerts` option can be used.
+
+ All data shown in the report will be sent to the the email addresses in `planflip.conf`.
+
+ If this script is run every few minutes, likely you would not care to be paged every time the same SQL is found.
+
+ Using the `--save-alerts` option will cause the sql_id/plan_hash_value combination to be saved in then poc-plan-flip.csv file, where the sql_id, plan_hash_value, and the current time are saved.
+
+ This will prevent alerting on the same sql_id/plan_hash_value more frequently than every 24 hours.  This can be controlled with the `--alert-freq` option, which takes a value in seconds, and defaults to 86400.
+
+ $  ./poc-unstable-plans.pl  --save-alerts --send-alerts --sysdba --username sys --password XXXX --database myserver/orcl.jks.com --begin-time '2023-03-31 00:00:00' --end-time '2023-04-01 23:00:00'  --min-stddev  0.01
    format: yyyy-mm-dd hh24:mi:ss
-    start: 2022-05-10 00:00:00
-      end: 2022-05-12 23:00:00
- Epoch: 1652831362
-                                                                           PLAN
- SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT        MIN_ETIME        MAX_ETIME     STDDEV_ETIME      NORM_STDDEV
- ------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ---------------- ----------------
- 56pwkjspvmg3h   1448083145        59561 SOE                    138.569       2        4.7552763        4.7552763      122.1845768       25.6945275
- gkxxkghxubh1a   2220165490        59234 SOE                    139.322       2        4.7165040        4.7165040      199.9986083       42.4039942
+    start: 2023-03-31 00:00:00
+      end: 2023-04-01 23:00:00
+ Epoch: 1680487122
+                                                                           PLAN CURRENT AVERAGE  HISTORIC AVERAGE STDDEV
+ SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT EXECTION TIME    EXECUTION TIME   EXECUTION TIME
+ ------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ----------------
+ g4rkmp4240p84            0         1886 SOE                      0.000       1        0.0002950        0.0002310        0.0035790
+ 1astj4jqd7601   2611064198            1 SOE                  49921.000       1        3.3440280        2.4525210        0.0000000
+ a9gvfh5hx9u98            0       650076 SOE                      0.000       1        0.0133100        0.0005620        0.5572570
+ cj9v3ynkm7uuy            0       260334 SOE                      0.012       1        0.0118640        0.0025960        0.2107240
+ apgb2g9q2zjh1            0      1949525 SOE                      0.000       1        0.0157280        0.0007870        1.0866170
+ dw75zwwuz1xhg    630573765            9 SOE                   8924.778       1        6.1637250        5.8901080        0.1474840
+
+
 
  $  cat poc-plan-flip.csv
- 56pwkjspvmg3h,1448083145,1652831362
- gkxxkghxubh1a,2220165490,1652831362
+ 1astj4jqd7601,2611064198,1680483816
+ a9gvfh5hx9u98,0,1680483816
+ apgb2g9q2zjh1,0,1680483816
+ cj9v3ynkm7uuy,0,1680483816
+ dw75zwwuz1xhg,630573765,1680483816
+ g4rkmp4240p84,0,1680483816
 
  The poc-plan-flip.csv is used when the --send-alerts option is used. 
 
@@ -530,47 +618,23 @@ format STDOUT =
 
  The amount of time before sending an alert again can be altered with the '--alert-freq' option.
 
- The '--realtime' option can now be used to look for SQL statements whose execution time has become excessive.
-
- $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --realtime --database //rac-scan/swingbench --username somedba --password XXX  --min-stddev  20 --max-exe-time 3 --save-alerts --send-alerts 
- 
- $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --realtime --database //rac-scan/swingbench --username jkstill --password XXX realtime --send-alerts --save-alerts  --min-stddev 0.05
- Major/Minor version 19/0
-
-
-  running query for unstable-plans-baseline-realtime-CONTAINER
- Epoch: 1652827081
-                                                                           PLAN
- SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT        MIN_ETIME        MAX_ETIME     STDDEV_ETIME      NORM_STDDEV
- ------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ---------------- ----------------
- 29qp10usqkqh0   3619984409            1 SOE                 436363.000       2      244.2520940      244.2520940       17.5796194        0.0719733
- 29qp10usqkqh0    388976350            9 SOE                 123335.605       2      219.3907579      219.3907579       17.5796194        0.0801293
- Sending alerts!
-
- The next time the script is run, it will not alert:
-  
- $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --realtime --database //rac-scan/swingbench --username jkstill --password XXX realtime --send-alerts --save-alerts  --min-stddev 0.05
- Major/Minor version 19/0
-
-
-  running query for unstable-plans-baseline-realtime-CONTAINER
- Epoch: 1652827112
-
-
  Alerts can be forced by using '--alert-freq 0'. This also causes the alert time to be updated in the 'poc-plan-flip.csv'.
 
- $ $ORACLE_HOME/perl/bin/perl ./poc-unstable-plans.pl --alert-freq 0 --realtime --database //rac-scan/swingbench --username jkstill --password XXX realtime --send-alerts --save-alerts  --min-stddev 0.05
- Major/Minor version 19/0
+ $  ./poc-unstable-plans.pl --alert-freq 0 --send-alerts --sysdba --username sys --password XXXX --database myserver/orcl.jks.com --begin-time '2023-03-31 00:00:00' --end-time '2023-04-01 23:00:00'  --min-stddev  0.01
 
-
-  running query for unstable-plans-baseline-realtime-CONTAINER
- Epoch: 1652827256
-
-                                                                           PLAN
- SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT        MIN_ETIME        MAX_ETIME     STDDEV_ETIME      NORM_STDDEV
- ------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ---------------- ----------------
- 29qp10usqkqh0   3619984409            1 SOE                 436363.000       2      244.2520940      244.2520940       17.5796194        0.0719733
- 29qp10usqkqh0    388976350            9 SOE                 123335.605       2      219.3907579      219.3907579       17.5796194        0.0801293
+   format: yyyy-mm-dd hh24:mi:ss
+    start: 2023-03-31 00:00:00
+      end: 2023-04-01 23:00:00
+ Epoch: 1680487217
+                                                                           PLAN CURRENT AVERAGE  HISTORIC AVERAGE STDDEV
+ SQL_ID        PLAN HASH           EXECS USERNAME               AVG_LIO   COUNT EXECTION TIME    EXECUTION TIME   EXECUTION TIME
+ ------------- ------------ ------------ --------------- -------------- ------- ---------------- ---------------- ----------------
+ dw75zwwuz1xhg    630573765            9 SOE                   8924.778       1        6.1637250        5.8901080        0.1474840
+ cj9v3ynkm7uuy            0       260407 SOE                      0.012       1        0.0118620        0.0025960        0.2107240
+ 1astj4jqd7601   2611064198            1 SOE                  49921.000       1        3.3440280        2.4525210        0.0000000
+ a9gvfh5hx9u98            0       650253 SOE                      0.000       1        0.0133070        0.0005620        0.5572570
+ apgb2g9q2zjh1            0      1950051 SOE                      0.000       1        0.0157270        0.0007870        1.0866170
+ g4rkmp4240p84            0         1886 SOE                      0.000       1        0.0002950        0.0002310        0.0035790
  Sending alerts!
 
 
@@ -633,7 +697,6 @@ format STDOUT =
 
 =item --dbtype
 
-
  manually set the type of database. 
  
  this is mostly useful in testing, such as when examining the SQL statement used to check for poorly performing SQL
@@ -649,20 +712,20 @@ format STDOUT =
 
  latest time to check AWR, in 'YYYY-MM-DD HH24:MI:SS' format
 
+=item --reference-file
 
-=item --realtime
+ If the --reference-file <filename> option is used, then the reference data comes from this file.
 
- look at realtime data in gv$sqlstats.
- the --begin-time and --end-time arguments are ignored
+ When --reference-file is used, the --begin-time and --end-time arguments are ignored.
 
+=item --save-reference-file
+
+ When --save-reference-file <filename> is used, the AWR data as specified by --begin-time and --end-time arguments
+ is saved to the specified filename.
 
 =item --min-stddev
 
-minimum value of normalized stddev exe times to look for - defaults to 0.001
-
-=item --max-exe-time
-
-minimum value of max execution time to look for  - defaults to 0.001
+ minimum value of stddev exe times to look for - defaults to 0.001
 
 =item --send-alerts
 
@@ -672,7 +735,6 @@ send alert emails - default is to not send alerts
 
 save alert history - default is to not save alert history
 when used with --send-alerts and --alert-freq it is used to control when alerts are sent
-
 
 =item --alert-freq
 
@@ -727,10 +789,7 @@ when used with --send-alerts and --alert-freq it is used to control when alerts 
 
    #$csvOutput=1;
    #$csvDelimiter='|';
-   #$timeScope='realtime';
-   #$realtime=1;
-   #$defMinNormStddev=0.010;
-   #$defMinimumMaxEtime=0.5;
+   #$defMinStddev=0.010;
 
 =head1 Sending Mail
 
@@ -747,7 +806,6 @@ when used with --send-alerts and --alert-freq it is used to control when alerts 
  * find a period that represents decent performance with the --begin-time and --end-time options
  * use the --save-alerts option
  * use cron or a scheduler to run with these options
-  --realtime
   --save-alerts
   --send-alerts
 
@@ -893,13 +951,80 @@ sub sendAlert {
 }
 
 # send a string
-sub debugWarn {
+sub DEBUGWarn {
 	warn "$_[0]" if $DEBUG;
 }
 
 # send a string
-sub debugPrint {
+sub DEBUGPrint {
 	print "$_[0]" if $DEBUG;
 }
 
+sub getRealtimeData {
+
+	my ($dbh,$sql) = @_;
+	my $data;
+
+	my $sth = $dbh->prepare($sql);
+	$sth->execute;
+
+	while ( my $ary = $sth->fetchrow_arrayref ) {
+		print 'realtime: ' . join(' - ',@{$ary}) . "\n" if $DEBUG;
+		foreach my $i ( (4,6,7) ) { $ary->[$i] = sprintf("%9.${decimalPlaces}f", $ary->[$i]); }
+		$data->{$ary->[0] . $ary->[1]} = [@{$ary}];
+	}
+
+	return $data;
+}
+
+sub getColNames {
+	my ($dbh,$sql) = @_;
+	my $data;
+
+	my $sth = $dbh->prepare($sql);
+	my @colNames = @{$sth->{NAME_lc}};
+	$sth->finish;
+	return @colNames;
+}
+
+sub getHistoricData{
+	my ($dbh,$sql,$startTime,$endTime,$timestampFormat) = @_;
+	my $data;
+
+	my $sth = $dbh->prepare($sql);
+	$sth->execute($snapStartTime, $snapEndTime, $timestampFormat);
+
+	#print join(qq/ /, @{ $historicSTH->{NAME_lc} }) . "\n";
+	while ( my $ary = $sth->fetchrow_arrayref ) {
+		print join(' - ',@{$ary}) . "\n" if $DEBUG;
+		foreach my $i ( (4,6,7) ) { $ary->[$i] = sprintf("%9.${decimalPlaces}f", $ary->[$i]); }
+		$data->{$ary->[0] . $ary->[1]} = [@{$ary}];
+	}
+
+	return $data;
+}
+
+sub saveReferenceFile{
+	my ($file,$data) = @_;
+	my $refFileFH = IO::File->new($file,'w') or die "could not open $file for writing - $!\n";
+	foreach my $sqlKey ( keys %{$data} ) {
+		$refFileFH->print($sqlKey . ',' . join(',',@{$data->{$sqlKey}}) . "\n");
+	}
+}
+
+sub getHistoryFromFile{
+	my ($file) = @_;
+	my $historyData;
+
+	$refFileFH = IO::File->new($file,'r') or die "could not open $file for reading - $!\n";
+	while(<$refFileFH>) {
+		chomp;
+		my @data=split(',');
+		my $sqlKey=$data[0];
+		shift @data; # remove element 0
+		$historyData->{$sqlKey} = [@data];
+	}
+
+	return $historyData;
+}
 

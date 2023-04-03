@@ -90,34 +90,22 @@ Dynamic sampling is better than no statistics, but this may lead to unacceptable
 It may be a good idea in such cases to copy the statistics from the latest full partition, or use a set of 'standard' statistics that fairly represent the data.
 It is even possible to generate statistics manually as part of a data load, then used dbms_stats.set_table|index_statistics with the generated data.
 
-The purpose of this monitor is to detect when a plan change leads to degraded performance, and notify responsible parties about it.
+The purpose of this monitor is to detect SQL performance degradatiion, which may be due to a change to a non-optimal execution plan.
 
+The main script `poc-unstable-plans.pl` is found the [poc](./poc) directory.
+
+See `./poc-unstable-plans.pl` for instructions.
+
+This script does require the `DBI` and `DBD::Oracle` Perl modules.
+
+If you run the script from an Oracle database server, you can use `$ORACLE_HOME/perl/bin/perl poc-unstable-plans.pl`
 
 ## Fake Database Statistics
+
+Testing has been performed by using the [Swingbench](http://www.dominicgiles.com/swingbench.html) load generator.
 
 See `./swingbench-fake-stats/README.md` for instructions on setting fake statistics.
 
 Why fake statistics?  Lying to the optimizer can cause poor execution plans, which is desirable for testing.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

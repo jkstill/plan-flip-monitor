@@ -30,17 +30,14 @@ our %sql = ();
 
  unstable-plans-baseline-[historic|realtime]-[CONTAINER|LEGACY]
 
-   :1 low value for norm_stddev
-	:2 low value for max_etime
 
  unstable-plans-baseline-historicrealtime-[CONTAINER|LEGACY]
   
-	:3 begin_time
-	:4 end_time
-	:5 date_format
+	:1 begin_time
+	:2 end_time
+	:3 date_format
 
 =cut
-
 
 %sql = (
 	'con-id-clause' => q{and con_id = sys_context('userenv','con_id')},
@@ -51,14 +48,14 @@ min_snap_id as
 	select
 		min(snap_id) snap_id
 	from dba_hist_snapshot
-	where begin_interval_time >=  to_timestamp(:3,:5) <<CONTAINER-CLAUSE>>
+	where begin_interval_time >=  to_timestamp(:1,:3) <<CONTAINER-CLAUSE>>
 ),
 max_snap_id as
 (
 	select
 		max(snap_id) snap_id
 	from dba_hist_snapshot
-	where end_interval_time <= to_timestamp(:4,:5) <<CONTAINER-CLAUSE>>
+	where end_interval_time <= to_timestamp(:2,:3) <<CONTAINER-CLAUSE>>
 ),
 rawdata as
 (
@@ -73,8 +70,9 @@ rawdata as
 				sum( nvl( executions_delta, 0 ) )
 				, 0, 1
 				, sum( executions_delta )
-			) / 1000000
-		) avg_etime
+			)
+		) / 1000000 avg_etime
+		, max(stddev(elapsed_time_delta)) over (partition by sql_id,plan_hash_value) / 1000000 stddev_elapsed
 		, sum ( buffer_gets_delta /
 			decode
 			(
@@ -103,7 +101,8 @@ rawdata as
 		, execs
 		, avg_lio
 		, avg_etime
-		, stddev( avg_etime ) over( partition BY sql_id ) stddev_etime
+		--, stddev( avg_etime ) over( partition BY sql_id ) stddev_etime
+		, stddev_elapsed stddev_etime
 	from
 	rawdata
 )
@@ -122,13 +121,13 @@ rawdata as
 	select
 	sql_id, plan_hash_value
 		, sum( execs ) execs
-		, min( avg_etime )              min_etime
-		, max( avg_etime )              max_etime
+		, avg_etime
 		, stddev_etime
-		, stddev_etime/min( avg_etime ) norm_stddev
+		--, stddev_etime/min( avg_etime ) norm_stddev
 	from data
 	group by
 		sql_id
+		, avg_etime
 		, stddev_etime
 		, plan_hash_value
 ),
@@ -140,16 +139,10 @@ getuser as (
 		, (select max(parsing_schema_name) from gv$sqlarea where sql_id = r.sql_id) username
 		, ( select sum(avg_lio) from lios where sql_id = r.sql_id and plan_hash_value = r.plan_hash_value)/ r.execs avg_lio
 		, ( select plan_count from plan_counts where sql_id = r.sql_id) plan_count
-		, r.min_etime
-		, r.max_etime
+		, r.avg_etime
 		, r.stddev_etime
-		, r.norm_stddev
+		--, r.norm_stddev
 	from report_data r
-	where
-   	r.norm_stddev > :1
-   	and r.max_etime > :2
-	ORDER BY
-   	norm_stddev
 )
 select *
 from getuser
@@ -163,6 +156,7 @@ order by sql_id, plan_hash_value},
 #order by norm_stddev},
 # end of unstable-plans-baseline-CONTAINER
 
+# compare realtime data to historic data
 
 	'unstable-plans-baseline-realtime' => q{with
 rawdata as
@@ -178,8 +172,9 @@ rawdata as
             sum( nvl( executions, 0 ) )
             , 0, 1
             , sum( executions )
-         ) / 1000000
-      ) avg_etime
+         )
+      ) / 1000000  avg_etime
+		, max(stddev(elapsed_time)) over (partition by sql_id,plan_hash_value) / 1000000 stddev_elapsed
       , sum ( buffer_gets /
          decode
          (
@@ -203,7 +198,7 @@ rawdata as
 		, execs
 		, avg_lio
 		, avg_etime
-		, stddev( avg_etime ) over( partition BY sql_id ) stddev_etime
+		, stddev_elapsed stddev_etime
 	from
 	rawdata
 )
@@ -222,13 +217,13 @@ rawdata as
 	select
 	sql_id, plan_hash_value
 		, sum( execs ) execs
-		, min( avg_etime )              min_etime
-		, max( avg_etime )              max_etime
+		, avg_etime
 		, stddev_etime
-		, stddev_etime/min( avg_etime ) norm_stddev
+		--, stddev_etime/min( avg_etime ) norm_stddev
 	from data
 	group by
 		sql_id
+		, avg_etime
 		, stddev_etime
 		, plan_hash_value
 ),
@@ -240,16 +235,10 @@ getuser as (
 		, (select max(parsing_schema_name) from gv$sqlarea where sql_id = r.sql_id) username
 		, ( select sum(avg_lio) from lios where sql_id = r.sql_id and plan_hash_value = r.plan_hash_value)/ r.execs avg_lio
 		, ( select plan_count from plan_counts where sql_id = r.sql_id) plan_count
-		, r.min_etime
-		, r.max_etime
+		, r.avg_etime
 		, r.stddev_etime
-		, r.norm_stddev
+		--, r.norm_stddev
 	from report_data r
-	where
-   	r.norm_stddev > :1
-   	and r.max_etime > :2
-	ORDER BY
-   	norm_stddev
 )
 select *
 from getuser
@@ -259,10 +248,9 @@ where username not in
    from system.LOGSTDBY$SKIP_SUPPORT
    where action = 0
 )
-order by sql_id, plan_hash_value},
-#order by norm_stddev},
+order by sql_id, plan_hash_value
+},
 # end of unstable-plans-baseline-CONTAINER
-
 );
 
 1;
